@@ -1,5 +1,5 @@
 {
-  "name": "v-dropzone",
+  "name": "@ozjsey/v-dropzone",
   "version": "0.1.0",
   "description": "Vue 3 directive owning the full drag-drop / paste / click-to-pick / upload pipeline — fixes phantom-leave, MIME filtering, paste, and progress in one binding",
   "author": "Ozgur Seyidoglu",
@@ -13,6 +13,7 @@
   "types": "dist/vDropzone.d.ts",
   "exports": { ".": { "import": "./dist/vDropzone.min.js", "types": "./dist/vDropzone.d.ts" } },
   "files": ["dist"],
+  "publishConfig": { "access": "public" },
   "scripts": {
     "build": "tsup vDropzone.ts --format esm --minify --dts --out-dir dist --clean && mv dist/vDropzone.js dist/vDropzone.min.js",
     "test": "vitest run",
