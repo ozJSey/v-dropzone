@@ -1,4 +1,4 @@
-# @ozjsey/v-dropzone
+### [@ozjsey/v-dropzone](https://www.npmjs.com/package/@ozjsey/v-dropzone)
 
 ## Playground
 
