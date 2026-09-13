@@ -234,7 +234,7 @@ cannot be removed from `api.pending` — decide whether that is a gap or the con
 - ESM smoke (`node --input-type=module -e "import(./dist/vDropzone.min.js)"`) confirms public surface: `default` + `vDropzone` exports both present, `vDropzone.mounted` is a function.
 
 **Reachability:**
-- Source: `import { vDropzone } from '@ozjsey/v-dropzone'` → `app.directive('dropzone', vDropzone)`.
+- Source: `import { vDropzone } from 'v-dropzone'` → `app.directive('dropzone', vDropzone)`.
 - Template: `<div v-dropzone="onFiles" />` (bare) or `<div v-dropzone="{ on, accept, ... }" />` (full).
 - CSS hooks: `[data-dropzone="active"]` while dragging; `[data-dropzone="idle"]` otherwise.
 - Playground: open `playground.html` after `npm run build`.

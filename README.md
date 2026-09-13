@@ -1,4 +1,4 @@
-### [@ozjsey/v-dropzone](https://www.npmjs.com/package/@ozjsey/v-dropzone)
+# v-dropzone
 
 Vue 3 directive owning the full drag-drop pipeline. Drop / paste / click-to-pick → validate → upload → state. One binding, zero wrapper components, full TypeScript.
 
@@ -7,7 +7,7 @@ Vue 3 directive owning the full drag-drop pipeline. Drop / paste / click-to-pick
 ## Install
 
 ```bash
-npm install @ozjsey/v-dropzone
+npm install v-dropzone
 ```
 
 ## Quick start
@@ -15,7 +15,7 @@ npm install @ozjsey/v-dropzone
 ```ts
 // main.ts
 import { createApp } from 'vue'
-import { DropzonePlugin } from '@ozjsey/v-dropzone'
+import { DropzonePlugin } from 'v-dropzone'
 import App from './App.vue'
 
 const app = createApp(App)
@@ -26,7 +26,7 @@ app.mount('#app')
 Three equivalent install paths — pick whichever fits your setup:
 
 ```ts
-import { DropzonePlugin, DIRECTIVE_NAME, vDropzone } from '@ozjsey/v-dropzone'
+import { DropzonePlugin, DIRECTIVE_NAME, vDropzone } from 'v-dropzone'
 
 app.use(DropzonePlugin)                       // 1. plugin (recommended)
 app.directive(DIRECTIVE_NAME, vDropzone)      // 2. manual, canonical name
@@ -41,7 +41,7 @@ Or register it on a single component instead of app-wide:
 
 ```vue
 <script setup lang="ts">
-import { vDropzone } from '@ozjsey/v-dropzone'   // `v`-prefixed, so the template picks it up as v-dropzone
+import { vDropzone } from 'v-dropzone'   // `v`-prefixed, so the template picks it up as v-dropzone
 </script>
 ```
 
@@ -137,7 +137,7 @@ One binding, three input routes: drop, click-to-pick, and Tab + Enter.
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { DropzoneOptions } from '@ozjsey/v-dropzone'
+import type { DropzoneOptions } from 'v-dropzone'
 
 const token = ref('')
 const myFiles = ref<{ file: File; response: unknown }[]>([])
@@ -169,7 +169,7 @@ const options = computed<DropzoneOptions>(() => ({
 
 <script setup lang="ts">
 import { computed, reactive } from 'vue'
-import type { DropzoneOptions } from '@ozjsey/v-dropzone'
+import type { DropzoneOptions } from 'v-dropzone'
 
 const savedKeys = reactive<Record<string, string>>({})
 
@@ -258,7 +258,7 @@ Pass a Vue `ref` and the directive populates it with a reactive `DropzoneApi`:
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { DropzoneApi } from '@ozjsey/v-dropzone'
+import type { DropzoneApi } from 'v-dropzone'
 
 const dz = ref<DropzoneApi>()
 
@@ -300,7 +300,7 @@ already the visible affordance for the picker — if that is your whole design, 
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { DropzoneApi } from '@ozjsey/v-dropzone'
+import type { DropzoneApi } from 'v-dropzone'
 
 const dz = ref<DropzoneApi>()
 const options = computed(() => ({ ref: dz, autoUpload: false, upload: { url: '/api/upload' } }))
@@ -484,7 +484,7 @@ Both vars are **set** when uploads start, **persist** through `uploading` / `act
 Pass a `ref` and the directive fills it with a reactive object:
 
 ```ts
-import type { DropzoneApi } from '@ozjsey/v-dropzone'
+import type { DropzoneApi } from 'v-dropzone'
 
 const dz = ref<DropzoneApi>()
 const options = computed(() => ({ ref: dz, upload: { url: '/api/upload' } }))
@@ -554,7 +554,7 @@ import type {
   UploadError,
   UploadProgressEvent,
   UploadResult,
-} from '@ozjsey/v-dropzone'
+} from 'v-dropzone'
 ```
 
 No `@types/v-dropzone` companion package; the package ships its own `dist/vDropzone.d.ts`.

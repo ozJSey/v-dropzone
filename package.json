@@ -13,7 +13,6 @@
   "types": "dist/vDropzone.d.ts",
   "exports": { ".": { "import": "./dist/vDropzone.min.js", "types": "./dist/vDropzone.d.ts" } },
   "files": ["dist"],
-  "publishConfig": { "access": "public" },
   "scripts": {
     "build": "tsup vDropzone.ts --format esm --minify --dts --out-dir dist --clean && mv dist/vDropzone.js dist/vDropzone.min.js",
     "test": "vitest run",
