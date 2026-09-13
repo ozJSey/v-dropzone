@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>v-dropzone Playground</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 2rem; background: #f5f5f5; color: #222; max-width: 720px; }
+    h1 { font-size: 1.5rem; }
+    p { max-width: 60ch; line-height: 1.6; }
+    .dz {
+      margin-top: 1rem;
+      padding: 2.5rem 2rem;
+      border: 2px dashed #aaa;
+      border-radius: 12px;
+      background: #fff;
+      text-align: center;
+      color: #555;
+      transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+    }
+    .dz .child {
+      display: inline-block;
+      padding: 0.5rem 1rem;
+      margin-top: 0.75rem;
+      background: #eef2ff;
+      border-radius: 6px;
+      color: #4338ca;
+      pointer-events: auto;
+    }
+    .dz[data-dropzone="active"] {
+      border-color: #4f46e5;
+      background: #eef2ff;
+      color: #4338ca;
+    }
+    .dz[data-dropzone="rejected"] {
+      border-color: #dc2626;
+      background: #fef2f2;
+      color: #991b1b;
+    }
+    .dz[data-dropzone="uploading"] {
+      border-color: #2563eb;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+    .dz[data-dropzone="success"] {
+      border-color: #16a34a;
+      background: #f0fdf4;
+      color: #166534;
+    }
+    .dz[data-dropzone="error"] {
+      border-color: #dc2626;
+      background: #fef2f2;
+      color: #991b1b;
+    }
+    .dz-progress {
+      position: relative;
+      display: none;
+      height: 6px;
+      margin-top: 0.75rem;
+      background: rgba(0, 0, 0, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .dz[data-dropzone="uploading"] .dz-progress,
+    .dz[data-dropzone="success"]   .dz-progress,
+    .dz[data-dropzone="error"]     .dz-progress { display: block; }
+    .dz-progress::after {
+      content: '';
+      display: block;
+      width: calc(var(--dropzone-progress, 0) * 1%);
+      height: 100%;
+      background: #2563eb;
+      transition: width 120ms ease-out;
+    }
+    .dz[data-dropzone="success"] .dz-progress::after { background: #16a34a; }
+    .dz[data-dropzone="error"]   .dz-progress::after { background: #dc2626; }
+    .dz-counter {
+      display: none;
+      margin-top: 0.5rem;
+      font-size: 0.85rem;
+      color: #1d4ed8;
+      counter-reset: pending var(--dropzone-files-pending, 0);
+    }
+    .dz[data-dropzone="uploading"] .dz-counter { display: block; }
+    .dz-counter::before { content: counter(pending) ' file(s) remaining'; }
+    .dz--clickable { cursor: pointer; user-select: none; }
+    .dz--clickable .skip-btn {
+      cursor: default;
+      margin-top: 0.75rem;
+      padding: 0.4rem 0.9rem;
+      background: #fff;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font: inherit;
+      color: #374151;
+    }
+    .controls { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+    .controls button {
+      padding: 0.4rem 0.9rem;
+      background: #fff;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font: inherit;
+      color: #374151;
+      cursor: pointer;
+    }
+    .controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .controls button.primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+    .controls button.danger  { background: #dc2626; border-color: #dc2626; color: #fff; }
+    .file-list {
+      margin: 0.75rem 0 0;
+      padding-left: 1.25rem;
+      font-size: 0.9rem;
+      color: #4b5563;
+    }
+    .file-list li { padding: 0.1rem 0; }
+    .file-list li.file--uploading { color: #1d4ed8; }
+    .file-list li.file--failed    { color: #b91c1c; }
+    .pasted-img {
+      max-width: 220px;
+      max-height: 160px;
+      margin-top: 0.75rem;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+    }
+    h2 { font-size: 1.1rem; margin-top: 2rem; }
+    .log {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      background: #1f2937;
+      color: #f3f4f6;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      min-height: 64px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+
+<div id="app">
+  <h1>v-dropzone Playground</h1>
+  <p>
+    Drag a file (or several) over the box below. Notice the <code>data-dropzone</code>
+    attribute flip to <code>"active"</code> while the cursor is inside &mdash; even
+    while you cross over the nested label. Drop the file to invoke the handler.
+  </p>
+
+  <div v-dropzone="onFiles" class="dz">
+    Drop files here
+    <div class="child">&hellip; or drop them on this inner label, the counter still works</div>
+  </div>
+
+  <div class="log" v-text="log"></div>
+
+  <h2>Validation + click-to-pick</h2>
+  <p>
+    <code>accept: 'image/*,.pdf'</code>, <code>maxSize: 5 MB</code>,
+    <code>clickToPick: true</code>. Click anywhere in the box to open
+    the native picker &mdash; except the inner button, which keeps its own
+    click semantics.
+  </p>
+  <div
+    v-dropzone="{
+      accept: 'image/*,.pdf',
+      maxSize: 5_000_000,
+      clickToPick: true,
+      on: onPicked,
+      onReject: onPickReject,
+    }"
+    class="dz dz--clickable"
+  >
+    Drop or click here
+    <div>
+      <button type="button" class="skip-btn" @click="onSkipClick">
+        I do not open the picker
+      </button>
+    </div>
+  </div>
+  <div class="log" v-text="pickLog"></div>
+
+  <h2>Upload progress (CSS variables)</h2>
+  <p>
+    Drop files to start a <em>simulated</em> upload. The directive writes
+    <code>--dropzone-progress</code> (0&ndash;100) and
+    <code>--dropzone-files-pending</code> on the host. The blue bar and the
+    "N file(s) remaining" line below are pure CSS &mdash; no JS reads progress
+    state. Files complete after 1.5s each; a randomly-chosen one fails so you
+    can see the sticky <code>error</code> state.
+  </p>
+  <div
+    v-dropzone="{
+      upload: simulateUpload,
+      on: onUpload,
+      onUploaded: onUploadDone,
+      onError: onUploadError,
+    }"
+    class="dz"
+  >
+    Drop files here to upload
+    <div class="dz-progress"></div>
+    <div class="dz-counter"></div>
+  </div>
+  <div class="log" v-text="uploadLog"></div>
+
+  <h2>Paste-from-clipboard (anywhere on the page)</h2>
+  <p>
+    <code>paste: true, pasteOn: 'document'</code>. Press
+    <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>V</kbd> with an image in your clipboard
+    (a screenshot, a copied web image, …) — the directive catches it and runs
+    it through the same validation pipeline as drop / pick.
+  </p>
+  <div
+    v-dropzone="{
+      paste: true,
+      pasteOn: 'document',
+      accept: 'image/*',
+      on: onPaste,
+    }"
+    class="dz"
+  >
+    Paste an image — preview appears below
+    <img v-if="pastedSrc" :src="pastedSrc" class="pasted-img" alt="Pasted" />
+  </div>
+  <div class="log" v-text="pasteLog"></div>
+
+  <h2>Programmatic API + queue (autoUpload: false)</h2>
+  <p>
+    The directive exposes a <code>DropzoneApi</code> via the <code>ref</code>
+    option. Drop files (they queue — <code>autoUpload: false</code>), then use
+    the buttons to <em>open</em> the picker, <em>start</em> the upload,
+    <em>cancel</em> in-flight transfers, or <em>retry</em> failed ones.
+  </p>
+  <div
+    v-dropzone="{
+      ref: apiRef,
+      autoUpload: false,
+      upload: simulateUpload,
+      onUploaded: onProgUploaded,
+      onError: onProgError,
+    }"
+    class="dz"
+  >
+    Drop or pick files — they queue until you press <em>Upload</em>
+    <ul v-if="apiRef && (apiRef.pending.length || apiRef.uploading.length || apiRef.failed.length)" class="file-list">
+      <li v-for="f in apiRef.pending"   :key="'p-' + f.name">⌛ {{ f.name }} <small>(queued)</small></li>
+      <li v-for="f in apiRef.uploading" :key="'u-' + f.name" class="file--uploading">↑ {{ f.name }} <small>(uploading)</small></li>
+      <li v-for="f in apiRef.failed"    :key="'f-' + f.name" class="file--failed">✗ {{ f.name }} <small>(failed)</small></li>
+    </ul>
+  </div>
+  <div class="controls">
+    <button @click="apiRef?.open()">Browse…</button>
+    <button class="primary" :disabled="!apiRef?.pending.length" @click="apiRef.upload()">
+      Upload {{ apiRef?.pending.length || 0 }} file(s)
+    </button>
+    <button class="danger"  :disabled="!apiRef?.uploading.length" @click="apiRef.cancel()">Cancel all</button>
+    <button :disabled="!apiRef?.failed.length"   @click="apiRef.retry()">Retry failed</button>
+    <button :disabled="apiRef?.state !== 'error'" @click="apiRef.dismissError()">Dismiss error</button>
+  </div>
+  <div class="log" v-text="progLog"></div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.js"
+  }
+}
+</script>
+<script type="module">
+  import { createApp, ref } from 'vue'
+  import { vDropzone } from './dist/vDropzone.min.js'
+
+  createApp({
+    directives: { dropzone: vDropzone },
+    setup() {
+      const log = ref('Waiting for a drop…')
+      const pickLog = ref('Waiting for a drop or click…')
+      const uploadLog = ref('Waiting for a drop…')
+      const pasteLog = ref('Waiting for a paste…')
+      const pastedSrc = ref('')
+      const progLog = ref('Drop / browse files. They queue until you press Upload.')
+      const apiRef = ref(null)
+
+      function fmt(files) {
+        return files.map((f) => `  • ${f.name} — ${f.type || 'unknown'} — ${f.size} B`).join('\n')
+      }
+
+      function onFiles(files) {
+        log.value = `Dropped ${files.length} file(s):\n` + fmt(files)
+        console.log('[v-dropzone] drop', files)
+      }
+
+      function onPicked(files) {
+        pickLog.value = `Accepted ${files.length} file(s):\n` + fmt(files)
+        console.log('[v-dropzone] picked', files)
+      }
+
+      function onPickReject({ files, reasons }) {
+        pickLog.value =
+          `Rejected ${files.length} file(s) — reasons: ${reasons.join(', ')}\n` + fmt(files)
+        console.warn('[v-dropzone] reject', files, reasons)
+      }
+
+      function onSkipClick() {
+        pickLog.value = 'Button click intercepted — the picker did NOT open.'
+        console.log('[v-dropzone] button click intercepted')
+      }
+
+      // Simulates a slow upload — drives the directive's `onProgress`
+      // callback so the CSS variables update smoothly. One file per batch
+      // randomly fails so the sticky `error` state is reachable.
+      function simulateUpload(file, signal, onProgress) {
+        return new Promise((resolve, reject) => {
+          let percent = 0
+          const willFail = Math.random() < 0.25
+          const tick = () => {
+            if (signal.aborted) return reject(new DOMException('aborted', 'AbortError'))
+            percent += 8 + Math.floor(Math.random() * 10)
+            if (percent >= 100) {
+              onProgress?.(100)
+              return willFail
+                ? reject(new Error(`simulated server error for ${file.name}`))
+                : resolve({ name: file.name, url: `/uploads/${file.name}` })
+            }
+            onProgress?.(percent)
+            setTimeout(tick, 120)
+          }
+          setTimeout(tick, 120)
+        })
+      }
+
+      function onUpload(files) {
+        uploadLog.value = `Uploading ${files.length} file(s):\n` + fmt(files)
+      }
+      function onUploadDone(file, response) {
+        uploadLog.value += `\n  ✓ ${file.name} → ${response.url}`
+      }
+      function onUploadError(file, error) {
+        uploadLog.value += `\n  ✗ ${file.name} — ${error.message}`
+      }
+
+      function onPaste(files) {
+        pasteLog.value = `Pasted ${files.length} image(s):\n` + fmt(files)
+        const first = files[0]
+        if (pastedSrc.value) URL.revokeObjectURL(pastedSrc.value)
+        pastedSrc.value = first ? URL.createObjectURL(first) : ''
+      }
+
+      function onProgUploaded(file, response) {
+        progLog.value += `\n  ✓ ${file.name} → ${response.url}`
+      }
+      function onProgError(file, error) {
+        progLog.value += `\n  ✗ ${file.name} — ${error.message}`
+      }
+
+      return {
+        log, pickLog, uploadLog, pasteLog, pastedSrc, progLog, apiRef,
+        onFiles, onPicked, onPickReject, onSkipClick,
+        simulateUpload, onUpload, onUploadDone, onUploadError,
+        onPaste, onProgUploaded, onProgError,
+      }
+    },
+  }).mount('#app')
+</script>
+
+</body>
+</html>
