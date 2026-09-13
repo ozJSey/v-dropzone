@@ -4,15 +4,30 @@
   "description": "Vue 3 directive owning the full drag-drop / paste / click-to-pick / upload pipeline — fixes phantom-leave, MIME filtering, paste, and progress in one binding",
   "author": "Ozgur Seyidoglu",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/ozJSey/vue-dropzone.git" },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ozJSey/vue-dropzone.git"
+  },
   "homepage": "https://github.com/ozJSey/vue-dropzone#readme",
-  "bugs": { "url": "https://github.com/ozJSey/vue-dropzone/issues" },
+  "bugs": {
+    "url": "https://github.com/ozJSey/vue-dropzone/issues"
+  },
   "type": "module",
   "main": "dist/vDropzone.min.js",
   "module": "dist/vDropzone.min.js",
   "types": "dist/vDropzone.d.ts",
-  "exports": { ".": { "import": "./dist/vDropzone.min.js", "types": "./dist/vDropzone.d.ts" } },
-  "files": ["dist"],
+  "exports": {
+    ".": {
+      "import": "./dist/vDropzone.min.js",
+      "types": "./dist/vDropzone.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup vDropzone.ts --format esm --minify --dts --out-dir dist --clean && mv dist/vDropzone.js dist/vDropzone.min.js",
     "test": "vitest run",
@@ -34,7 +49,9 @@
     "multipart",
     "xhr-upload"
   ],
-  "peerDependencies": { "vue": "^3.0.0" },
+  "peerDependencies": {
+    "vue": "^3.0.0"
+  },
   "devDependencies": {
     "jsdom": "^25.0.0",
     "tsup": "^8.5.1",
