@@ -1,5 +1,5 @@
 {
-  "name": "v-dropzone",
+  "name": "@ozjsey/v-dropzone",
   "version": "0.1.0",
   "description": "Vue 3 directive owning the full drag-drop / paste / click-to-pick / upload pipeline — fixes phantom-leave, MIME filtering, paste, and progress in one binding",
   "author": "Ozgur Seyidoglu",
