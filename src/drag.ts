@@ -2,6 +2,16 @@
  * Drag wiring — the four listeners with the enter/leave depth counter (the
  * only signal that survives child-traversal phantom leaves), the mandatory
  * `dragover` preventDefault, and the folder-aware drop path.
+ *
+ * All four listeners also call `stopPropagation()`, and that is a real,
+ * visible policy rather than boilerplate copied in beside the `preventDefault`
+ * that *is* load-bearing: an ancestor's `@dragover` / `@drop` never fires while
+ * the pointer is over this zone, so a page-level "drop anywhere" overlay goes
+ * quiet here, and a `v-dropzone` nested inside another one starves the outer
+ * zone's depth counter of the `dragenter` it needs to stay balanced (the outer
+ * zone's `active` styling drops off while the drag is over the inner one).
+ * It is documented in the README's Behavior list. Nesting zones is the case it
+ * gets wrong; the fix is scoped as its own change, not folded into a patch.
  */
 import { extractFiles, gatherDropEntries, walkEntries } from './files'
 import { processFiles } from './process'

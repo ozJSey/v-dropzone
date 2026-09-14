@@ -5720,6 +5720,419 @@ describe('v-dropzone — state lifecycle — success auto-clear semantics', () =
 })
 
 /* ------------------------------------------------------------------ */
+/*  Overlapping drops — two batches in flight on one zone              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The live 0.1.0 defect. `startUploadsForRecords` used to overwrite a single
+ * mutable `uploadBatch` counter, so a second drop discarded the bookkeeping
+ * for the requests the first drop still had open: the first drop's own
+ * completions then satisfied the *second* drop's counter, the zone announced
+ * `success` with two files still on the wire, and — because the counter was
+ * nulled at that point — the real failure that arrived afterwards never
+ * reached the state machine at all.
+ *
+ * The fix is to stop counting. "Is anything still uploading?" and "did
+ * anything fail?" are questions `instance.records` already answers.
+ */
+describe('v-dropzone — overlapping drops (two batches in flight)', () => {
+  beforeEach(installFakeXhr)
+  afterEach(restoreXhr)
+
+  it('stays "uploading" while the second drop is still on the wire', async () => {
+    const { dz } = mountHost({ upload: { url: '/api/upload' } })
+    await nextTick()
+
+    fireDragEvent(dz, 'drop', [makeFile('a.png', 'image/png'), makeFile('b.png', 'image/png')])
+    await nextTick()
+    expect(xhrQueue.length).toBe(2)
+
+    // Second drop lands before either of the first two has answered.
+    fireDragEvent(dz, 'drop', [makeFile('c.png', 'image/png'), makeFile('d.png', 'image/png')])
+    await nextTick()
+    expect(xhrQueue.length).toBe(4)
+
+    xhrQueue[0].emitLoad(200, '{}', { 'content-type': 'application/json' })
+    xhrQueue[1].emitLoad(200, '{}', { 'content-type': 'application/json' })
+    await nextTick()
+
+    expect(dz.getAttribute('data-dropzone')).toBe('uploading')
+    expect(dz.style.getPropertyValue('--dropzone-files-pending')).toBe('2')
+  })
+
+  it('does not swallow the second drop’s failure after the first drop settles', async () => {
+    const onError = vi.fn<(file: File, error: UploadError) => void>()
+    const apiRef = ref<DropzoneApi>()
+    const { dz } = mountHost({
+      ref: apiRef as unknown as DropzoneApiRef,
+      upload: { url: '/api/upload' },
+      onError,
+    })
+    await nextTick()
+
+    fireDragEvent(dz, 'drop', [makeFile('a.png', 'image/png'), makeFile('b.png', 'image/png')])
+    await nextTick()
+    fireDragEvent(dz, 'drop', [makeFile('c.png', 'image/png'), makeFile('d.png', 'image/png')])
+    await nextTick()
+
+    xhrQueue[0].emitLoad(200, '{}', { 'content-type': 'application/json' })
+    xhrQueue[1].emitLoad(200, '{}', { 'content-type': 'application/json' })
+    await nextTick()
+
+    // c.png 500s. The user must be told.
+    xhrQueue[2].emitLoad(500, 'boom')
+    await nextTick()
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(apiRef.value!.failed.map((f) => f.name)).toEqual(['c.png'])
+
+    xhrQueue[3].emitLoad(200, '{}', { 'content-type': 'application/json' })
+    await nextTick()
+    expect(dz.getAttribute('data-dropzone')).toBe('error')
+    expect(apiRef.value!.failed.map((f) => f.name)).toEqual(['c.png'])
+    expect(apiRef.value!.uploading).toEqual([])
+  })
+
+  it('counts every in-flight file in the CSS vars, not only the newest drop', async () => {
+    const { dz } = mountHost({ upload: { url: '/api/upload' } })
+    await nextTick()
+
+    fireDragEvent(dz, 'drop', [makeFile('a.png', 'image/png'), makeFile('b.png', 'image/png')])
+    await nextTick()
+    xhrQueue[0].emitProgress(100, 100)
+    xhrQueue[1].emitProgress(100, 100)
+    expect(dz.style.getPropertyValue('--dropzone-progress')).toBe('100')
+
+    fireDragEvent(dz, 'drop', [makeFile('c.png', 'image/png'), makeFile('d.png', 'image/png')])
+    await nextTick()
+
+    // Four files are open: two at 100%, two at 0%.
+    expect(dz.style.getPropertyValue('--dropzone-files-pending')).toBe('4')
+    expect(dz.style.getPropertyValue('--dropzone-progress')).toBe('50')
+  })
+
+  it('function transport: an overlapping drop does not settle the zone early', async () => {
+    const deferreds = [deferred<string>(), deferred<string>(), deferred<string>()]
+    let idx = 0
+    const upload = vi.fn<UploadFn>(() => deferreds[idx++].promise)
+    const { dz } = mountHost({ upload })
+    await nextTick()
+
+    fireDragEvent(dz, 'drop', [makeFile('a.png', 'image/png')])
+    await flushPromises()
+    fireDragEvent(dz, 'drop', [makeFile('b.png', 'image/png'), makeFile('c.png', 'image/png')])
+    await flushPromises()
+    expect(upload).toHaveBeenCalledTimes(3)
+
+    deferreds[0].resolve('ok')
+    await flushPromises()
+    expect(dz.getAttribute('data-dropzone')).toBe('uploading')
+
+    deferreds[1].reject(new Error('boom'))
+    deferreds[2].resolve('ok')
+    await flushPromises()
+    expect(dz.getAttribute('data-dropzone')).toBe('error')
+  })
+
+  it('a drop landing during an in-flight batch does not resurrect a settled error later', async () => {
+    // Finding 2: failed records were never pruned, so a bare dragenter /
+    // dragleave minutes later read the stale record and painted the zone red.
+    const apiRef = ref<DropzoneApi>()
+    const { dz } = mountHost({
+      ref: apiRef as unknown as DropzoneApiRef,
+      upload: { url: '/api/upload' },
+      onError: vi.fn(),
+    })
+    await nextTick()
+
+    let xhr = await dropOneFile(dz, makeFile('bad.png', 'image/png'))
+    xhr.emitLoad(500, 'boom')
+    await nextTick()
+    expect(dz.getAttribute('data-dropzone')).toBe('error')
+
+    // A later drop reseeds the machine — the README's own promise.
+    xhr = await dropOneFile(dz, makeFile('good.png', 'image/png'))
+    xhr.emitLoad(200, '{}', { 'content-type': 'application/json' })
+    await nextTick()
+    expect(dz.getAttribute('data-dropzone')).toBe('success')
+    expect(apiRef.value!.failed).toEqual([])
+
+    // A drag that never drops must not bring the old failure back.
+    fireDragEvent(dz, 'dragenter', [])
+    expect(dz.getAttribute('data-dropzone')).toBe('active')
+    fireDragEvent(dz, 'dragleave', [])
+    expect(dz.getAttribute('data-dropzone')).toBe('idle')
+    expect(apiRef.value!.failed).toEqual([])
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  A consumer callback that throws on the URL path                    */
+/* ------------------------------------------------------------------ */
+
+describe('v-dropzone — a throwing url / headers / formDataExtras function', () => {
+  beforeEach(installFakeXhr)
+  afterEach(restoreXhr)
+
+  it('reports a throwing `headers` function through onError instead of wedging at "uploading"', async () => {
+    const onError = vi.fn<(file: File, error: UploadError) => void>()
+    const apiRef = ref<DropzoneApi>()
+    const { dz } = mountHost({
+      ref: apiRef as unknown as DropzoneApiRef,
+      upload: {
+        url: '/api/upload',
+        headers: () => {
+          throw new Error('token refresh failed')
+        },
+      },
+      onError,
+    })
+    await nextTick()
+
+    fireDragEvent(dz, 'drop', [makeFile('a.png', 'image/png')])
+    await nextTick()
+
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onError.mock.calls[0][1].message).toBe('token refresh failed')
+    expect(dz.getAttribute('data-dropzone')).toBe('error')
+    expect(apiRef.value!.uploading).toEqual([])
+    expect(apiRef.value!.failed.map((f) => f.name)).toEqual(['a.png'])
+  })
+
+  it('a throwing `url` function on one file still sends the rest of the drop', async () => {
+    const onError = vi.fn<(file: File, error: UploadError) => void>()
+    const { dz } = mountHost({
+      upload: {
+        url: (file: File) => {
+          if (file.name === 'a.png') throw new Error('presign failed')
+          return '/api/upload'
+        },
+      },
+      onError,
+    })
+    await nextTick()
+
+    fireDragEvent(dz, 'drop', [makeFile('a.png', 'image/png'), makeFile('b.png', 'image/png')])
+    await nextTick()
+
+    // b.png must still be on the wire — the throw only kills its own group.
+    expect(xhrQueue.length).toBe(1)
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(dz.getAttribute('data-dropzone')).toBe('uploading')
+
+    xhrQueue[0].emitLoad(200, '{}', { 'content-type': 'application/json' })
+    await nextTick()
+    expect(dz.getAttribute('data-dropzone')).toBe('error')
+  })
+
+  it('a throwing `formDataExtras` function fails the file rather than the drop handler', async () => {
+    const onError = vi.fn<(file: File, error: UploadError) => void>()
+    const { dz } = mountHost({
+      upload: {
+        url: '/api/upload',
+        formDataExtras: () => {
+          throw new Error('no session')
+        },
+      },
+      onError,
+    })
+    await nextTick()
+
+    fireDragEvent(dz, 'drop', [makeFile('a.png', 'image/png')])
+    await nextTick()
+
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onError.mock.calls[0][1].message).toBe('no session')
+    expect(dz.getAttribute('data-dropzone')).toBe('error')
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  cancel(file) on a queued (pending) record                          */
+/* ------------------------------------------------------------------ */
+
+describe('v-dropzone — api — cancel() on a queued file', () => {
+  it('cancel(file) removes a queued file from api.pending', async () => {
+    const upload = vi.fn<UploadFn>(async () => 'ok')
+    const apiRef = ref<DropzoneApi>()
+    const { dz } = mountHost({
+      ref: apiRef as unknown as DropzoneApiRef,
+      upload,
+      autoUpload: false,
+    })
+    await nextTick()
+
+    const a = makeFile('a.png', 'image/png')
+    const b = makeFile('b.png', 'image/png')
+    fireDragEvent(dz, 'drop', [a, b])
+    await flushPromises()
+    expect(apiRef.value!.pending.map((f) => f.name)).toEqual(['a.png', 'b.png'])
+
+    apiRef.value!.cancel(a)
+    await nextTick()
+    expect(apiRef.value!.pending.map((f) => f.name)).toEqual(['b.png'])
+    expect(upload).not.toHaveBeenCalled()
+
+    apiRef.value!.upload()
+    await flushPromises()
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(upload.mock.calls[0][0].name).toBe('b.png')
+  })
+
+  it('cancelling a queued file leaves an in-flight upload alone', async () => {
+    const held = deferred<string>()
+    const upload = vi.fn<UploadFn>(() => held.promise)
+    const apiRef = ref<DropzoneApi>()
+    const { dz } = mountHost({
+      ref: apiRef as unknown as DropzoneApiRef,
+      upload,
+      autoUpload: false,
+    })
+    await nextTick()
+
+    const a = makeFile('a.png', 'image/png')
+    const b = makeFile('b.png', 'image/png')
+    fireDragEvent(dz, 'drop', [a])
+    await flushPromises()
+    apiRef.value!.upload()
+    await flushPromises()
+    expect(dz.getAttribute('data-dropzone')).toBe('uploading')
+
+    fireDragEvent(dz, 'drop', [b])
+    await flushPromises()
+    expect(apiRef.value!.pending.map((f) => f.name)).toEqual(['b.png'])
+
+    apiRef.value!.cancel(b)
+    await nextTick()
+    expect(apiRef.value!.pending).toEqual([])
+    // a.png is still on the wire — removing a queued file must not settle it.
+    expect(dz.getAttribute('data-dropzone')).toBe('uploading')
+
+    held.resolve('ok')
+    await flushPromises()
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  DZ-4 — the CSS vars must not describe a drop that uploaded nothing */
+/* ------------------------------------------------------------------ */
+
+describe('v-dropzone — CSS vars through the `rejected` state (DZ-4)', () => {
+  beforeEach(installFakeXhr)
+  afterEach(restoreXhr)
+
+  it('a rejected drop after a settled batch clears the stale progress vars', async () => {
+    const { dz } = mountHost({ upload: { url: '/api/upload' }, maxSize: 500 })
+    await nextTick()
+
+    const xhr = await dropOneFile(dz, makeFile('a.png', 'image/png', 100))
+    xhr.emitLoad(200, '{}', { 'content-type': 'application/json' })
+    await nextTick()
+    expect(dz.style.getPropertyValue('--dropzone-progress')).toBe('100')
+
+    fireDragEvent(dz, 'drop', [makeFile('big.png', 'image/png', 1000)])
+    await nextTick()
+    expect(dz.getAttribute('data-dropzone')).toBe('rejected')
+    // A progress bar showing 100% for a drop that uploaded nothing is a lie.
+    expect(dz.style.getPropertyValue('--dropzone-progress')).toBe('')
+    expect(dz.style.getPropertyValue('--dropzone-files-pending')).toBe('')
+  })
+
+  it('a rejected drop during a live upload leaves the in-flight vars alone', async () => {
+    const { dz } = mountHost({ upload: { url: '/api/upload' }, maxSize: 500 })
+    await nextTick()
+
+    const xhr = await dropOneFile(dz, makeFile('a.png', 'image/png', 100))
+    xhr.emitProgress(500, 1000)
+    expect(dz.style.getPropertyValue('--dropzone-progress')).toBe('50')
+
+    fireDragEvent(dz, 'drop', [makeFile('big.png', 'image/png', 1000)])
+    await nextTick()
+    expect(dz.style.getPropertyValue('--dropzone-progress')).toBe('50')
+    expect(dz.style.getPropertyValue('--dropzone-files-pending')).toBe('1')
+  })
+
+  it('the rejected auto-clear restores the upload state instead of forcing idle', async () => {
+    vi.useFakeTimers()
+    const { dz } = mountHost({ upload: { url: '/api/upload' }, maxSize: 500, rejectDuration: 100 })
+    await nextTick()
+
+    fireDragEvent(dz, 'drop', [makeFile('a.png', 'image/png', 100)])
+    await nextTick()
+    expect(dz.getAttribute('data-dropzone')).toBe('uploading')
+
+    fireDragEvent(dz, 'drop', [makeFile('big.png', 'image/png', 1000)])
+    await nextTick()
+    expect(dz.getAttribute('data-dropzone')).toBe('rejected')
+
+    vi.advanceTimersByTime(200)
+    // a.png never answered — the zone is still uploading, not idle.
+    expect(dz.getAttribute('data-dropzone')).toBe('uploading')
+    vi.useRealTimers()
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  anchor.ts — reverting only the position the directive wrote        */
+/* ------------------------------------------------------------------ */
+
+describe('v-dropzone — picker host anchor ownership', () => {
+  it('does not delete a `position` the consumer wrote after the directive anchored', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const clickToPick = ref(true)
+
+    const App = defineComponent({
+      setup() {
+        return () =>
+          withDirectives(h('div'), [[vDropzone, { clickToPick: clickToPick.value } as DropzoneOptions]])
+      },
+    })
+    const app = createApp(App)
+    app.mount(host)
+    await nextTick()
+
+    const dz = host.querySelector('div')!
+    // The host was static, so the directive anchored it.
+    expect(dz.style.position).toBe('relative')
+
+    // The consumer now positions the host themselves — a conditional class
+    // resolving to an inline style, an object `:style` binding, a sticky
+    // header. From here the inline `position` is theirs, not ours.
+    dz.style.position = 'sticky'
+
+    clickToPick.value = false
+    await nextTick()
+
+    expect(dz.style.position).toBe('sticky')
+    app.unmount()
+  })
+
+  it('still reverts its own anchor when the consumer never touched it', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const clickToPick = ref(true)
+
+    const App = defineComponent({
+      setup() {
+        return () =>
+          withDirectives(h('div'), [[vDropzone, { clickToPick: clickToPick.value } as DropzoneOptions]])
+      },
+    })
+    const app = createApp(App)
+    app.mount(host)
+    await nextTick()
+
+    const dz = host.querySelector('div')!
+    expect(dz.style.position).toBe('relative')
+
+    clickToPick.value = false
+    await nextTick()
+    expect(dz.style.position).toBe('')
+    app.unmount()
+  })
+})
+
+/* ------------------------------------------------------------------ */
 /*  DropzonePlugin + DIRECTIVE_NAME                                    */
 /* ------------------------------------------------------------------ */
 

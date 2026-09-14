@@ -6,6 +6,9 @@
 import { DEFAULT_FIELD_NAME, DEFAULT_SUCCESS_DURATION, DEFAULT_UPLOAD_METHOD } from './constants'
 import {
   clearSuccessTimer,
+  ensureRecord,
+  hasFailed,
+  hasInflight,
   setState,
   syncApiArrays,
   writeUploadVars,
@@ -61,28 +64,31 @@ function applyHeaders(xhr: XMLHttpRequest, headers: Record<string, string> | und
 }
 
 /**
- * Advance the batch counter and pick the next state when the batch finishes.
- * Shared between URL-based and function-based upload finishers.
+ * One file (or one batched group) just finished. Decide whether the zone as a
+ * whole is finished, and with what.
+ *
+ * Every finisher calls this after it has written the outcome into the records
+ * it owns — success deletes them, failure marks them `failed` — so the two
+ * questions this asks are answered by the same map the api arrays are built
+ * from. There is deliberately no counter: a counter has to be scoped to a
+ * batch, and "which batch" is exactly the thing that stops being well-defined
+ * the moment a second drop lands during an in-flight upload.
  */
-export function advanceBatch(el: HTMLElement, instance: DropzoneInstance, errored: boolean): void {
-  const batch = instance.uploadBatch
-  if (!batch) return
-  batch.done += 1
-  if (errored) batch.errors += 1
-  if (batch.done >= batch.total) {
-    instance.uploadBatch = null
-    if (batch.errors > 0) {
-      setState(el, instance, 'error')
-    } else {
-      setState(el, instance, 'success')
-      const duration = instance.opts.successDuration ?? DEFAULT_SUCCESS_DURATION
-      clearSuccessTimer(instance)
-      instance.successTimer = setTimeout(() => {
-        instance.successTimer = null
-        if (el.getAttribute('data-dropzone') === 'success') setState(el, instance, 'idle')
-      }, duration)
-    }
+export function settleUpload(el: HTMLElement, instance: DropzoneInstance): void {
+  // Something else is still on the wire — including anything a later drop
+  // started. Not finished, whatever this particular request did.
+  if (hasInflight(instance)) return
+  if (hasFailed(instance)) {
+    setState(el, instance, 'error')
+    return
   }
+  setState(el, instance, 'success')
+  const duration = instance.opts.successDuration ?? DEFAULT_SUCCESS_DURATION
+  clearSuccessTimer(instance)
+  instance.successTimer = setTimeout(() => {
+    instance.successTimer = null
+    if (instance.state === 'success') setState(el, instance, 'idle')
+  }, duration)
 }
 
 function emitUploaded(instance: DropzoneInstance, files: File[], response: unknown): void {
@@ -114,15 +120,19 @@ function sendUpload(
 ): XMLHttpRequest {
   const files = records.map((r) => r.file)
   const primary = files[0]
-  const xhr = new XMLHttpRequest()
   const method = config.method ?? DEFAULT_UPLOAD_METHOD
-  const url = resolveVal(config.url, primary) as string
 
+  // Everything the consumer supplies is resolved before the request object
+  // exists, so a throwing `url` / `headers` / `formDataExtras` leaves no
+  // half-built XHR behind — the caller catches it and fails the group.
+  const url = resolveVal(config.url, primary) as string
+  const headers = resolveVal(config.headers, primary) as Record<string, string> | undefined
+  const body = buildFormData(files, config)
+
+  const xhr = new XMLHttpRequest()
   xhr.open(method, url)
   if (config.withCredentials) xhr.withCredentials = true
   if (typeof config.timeout === 'number') xhr.timeout = config.timeout
-
-  const headers = resolveVal(config.headers, primary) as Record<string, string> | undefined
   applyHeaders(xhr, headers)
 
   const stillOwns = (): boolean => records.length > 0 && records[0].xhr === xhr
@@ -157,7 +167,7 @@ function sendUpload(
       }
       writeUploadVars(el, instance)
       syncApiArrays(instance)
-      advanceBatch(el, instance, false)
+      settleUpload(el, instance)
     } else {
       const message = `Upload failed: HTTP ${status}`
       emitError(instance, files, { message, status })
@@ -168,7 +178,7 @@ function sendUpload(
       }
       writeUploadVars(el, instance)
       syncApiArrays(instance)
-      advanceBatch(el, instance, true)
+      settleUpload(el, instance)
     }
   }
 
@@ -182,7 +192,7 @@ function sendUpload(
     }
     writeUploadVars(el, instance)
     syncApiArrays(instance)
-    advanceBatch(el, instance, true)
+    settleUpload(el, instance)
   }
 
   xhr.ontimeout = () => {
@@ -195,7 +205,7 @@ function sendUpload(
     }
     writeUploadVars(el, instance)
     syncApiArrays(instance)
-    advanceBatch(el, instance, true)
+    settleUpload(el, instance)
   }
 
   xhr.onabort = () => {
@@ -207,7 +217,7 @@ function sendUpload(
     emitError(instance, files, { message: 'Upload aborted', aborted: true })
   }
 
-  xhr.send(buildFormData(files, config))
+  xhr.send(body)
   return xhr
 }
 
@@ -262,7 +272,7 @@ async function sendUploadFn(
     instance.records.delete(file)
     record.controller = null
     syncApiArrays(instance)
-    advanceBatch(el, instance, false)
+    settleUpload(el, instance)
   } catch (err) {
     if (controller.signal.aborted) {
       if (!record.abortAnnounced) {
@@ -278,7 +288,7 @@ async function sendUploadFn(
     record.settled = true
     writeUploadVars(el, instance)
     syncApiArrays(instance)
-    advanceBatch(el, instance, true)
+    settleUpload(el, instance)
   }
 }
 
@@ -295,25 +305,24 @@ export function startUploadsForRecords(
   const config = instance.opts.upload
   if (!config || records.length === 0) return
 
-  // New upload batch invalidates any pending success → idle clear and clears
-  // a sticky error from the prior batch (so the user can see we've moved on).
+  // A new batch invalidates any pending success → idle clear. It does NOT
+  // clear a sticky error: pruning failed records belongs to the arrival of new
+  // *files* (`processFiles`), because retry also lands here and retrying one
+  // failed file must not discard the record for another.
   clearSuccessTimer(instance)
 
   for (const r of records) {
     r.status = 'uploading'
     r.xhr = null
     r.controller = null
+    r.abortAnnounced = false
     r.progressPercent = 0
     r.settled = false
   }
-  // Take a snapshot for the CSS vars — kept independent from `uploadBatch`
-  // (URL batched mode collapses to 1 XHR group but we still want files-pending
-  // to reflect the file count).
-  instance.progressBatch = records.slice()
+  mergeProgressSnapshot(instance, records)
   writeUploadVars(el, instance)
 
   if (typeof config === 'function') {
-    instance.uploadBatch = { total: records.length, done: 0, errors: 0 }
     setState(el, instance, 'uploading')
     for (const r of records) {
       r.group = [r]
@@ -327,7 +336,6 @@ export function startUploadsForRecords(
   }
 
   const groups = config.batched ? [records] : records.map((r) => [r])
-  instance.uploadBatch = { total: groups.length, done: 0, errors: 0 }
   setState(el, instance, 'uploading')
   for (const group of groups) {
     for (const r of group) r.group = group
@@ -335,37 +343,69 @@ export function startUploadsForRecords(
   syncApiArrays(instance)
 
   for (const group of groups) {
-    const xhr = sendUpload(el, instance, group, config)
+    // `url`, `headers` and `formDataExtras` may be consumer functions, and
+    // `xhr.open`/`xhr.send` throw on their own (a malformed URL, a revoked
+    // blob). A token-refresh callback that throws is the everyday case, and
+    // before this the exception escaped all the way to the drop listener: the
+    // zone stayed `uploading` forever, `onError` never fired, and the files
+    // *after* this group in the same drop were never sent either.
+    let xhr: XMLHttpRequest
+    try {
+      xhr = sendUpload(el, instance, group, config)
+    } catch (err) {
+      failRecords(el, instance, group, err)
+      continue
+    }
     for (const r of group) r.xhr = xhr
   }
+}
+
+/**
+ * Fold `records` into the snapshot the CSS vars are computed from, keeping any
+ * earlier record that has not settled yet.
+ *
+ * Replacing the snapshot outright is what made `--dropzone-progress` reset to 0
+ * and `--dropzone-files-pending` under-report while an earlier drop was still
+ * uploading: the bar described the newest drop and nothing else.
+ */
+function mergeProgressSnapshot(instance: DropzoneInstance, records: FileRecord[]): void {
+  const previous = instance.progressBatch
+  if (!previous) {
+    instance.progressBatch = records.slice()
+    return
+  }
+  const incoming = new Set(records)
+  const carried = previous.filter((r) => !r.settled && !incoming.has(r))
+  instance.progressBatch = [...carried, ...records]
+}
+
+/**
+ * Turn a synchronous failure into a normal upload failure: the consumer hears
+ * about it through `onError`, the files land in `api.failed` where retry can
+ * reach them, and the state machine settles like any other error.
+ */
+function failRecords(
+  el: HTMLElement,
+  instance: DropzoneInstance,
+  records: FileRecord[],
+  err: unknown,
+): void {
+  const message = err instanceof Error && err.message ? err.message : 'Upload failed'
+  emitError(instance, records.map((r) => r.file), { message })
+  for (const r of records) {
+    r.xhr = null
+    r.controller = null
+    r.status = 'failed'
+    r.settled = true
+  }
+  writeUploadVars(el, instance)
+  syncApiArrays(instance)
+  settleUpload(el, instance)
 }
 
 /** Create or reuse `pending` records for `files` and immediately start uploads. */
 export function startUploads(el: HTMLElement, instance: DropzoneInstance, accepted: File[]): void {
   if (!instance.opts.upload || accepted.length === 0) return
-  const records: FileRecord[] = accepted.map((file) => {
-    const existing = instance.records.get(file)
-    if (existing) {
-      existing.status = 'pending'
-      existing.xhr = null
-      existing.controller = null
-      existing.abortAnnounced = false
-      existing.progressPercent = 0
-      existing.settled = false
-      return existing
-    }
-    const rec: FileRecord = {
-      file,
-      status: 'pending',
-      xhr: null,
-      controller: null,
-      group: [],
-      abortAnnounced: false,
-      progressPercent: 0,
-      settled: false,
-    }
-    instance.records.set(file, rec)
-    return rec
-  })
+  const records = accepted.map((file) => ensureRecord(instance, file))
   startUploadsForRecords(el, instance, records)
 }

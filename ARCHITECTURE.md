@@ -18,7 +18,7 @@ vDropzone.ts               entry — re-exports src/index
     │                      writes layout to the host, and the guard that reverts it
     ├── process.ts         THE pipeline: validate → state → on/onReject → upload/queue
     ├── upload-control.ts  cancel (group / all / hard-abort) + retry
-    ├── upload.ts          XHR pipeline, function transport, batch bookkeeping
+    ├── upload.ts          XHR pipeline, function transport, upload kickoff + settle
     ├── state.ts           instance shape, WeakMap store, and every reflection:
     │                      data-dropzone, --dropzone-* CSS vars, reactive api arrays
     ├── validate.ts        accept matching + per-file vs drop-level rules
@@ -31,7 +31,10 @@ The invariants the layout encodes:
 
 - **`process.ts` is the one pipeline.** Drop (`drag.ts`), pick (`picker.ts`), paste (`paste.ts`)
   and `api.upload(files)` all call `processFiles` — validation and state transitions can never
-  diverge between input paths. The single deliberate divergence is `processFiles`' `forceUpload`
+  diverge between input paths. It is also the one place that prunes failed records, because
+  "reseed on the next drop" is a property of *files arriving*, not of an upload starting: retry
+  and `api.upload()` reach `startUploadsForRecords` directly, and retrying one failed file must
+  not discard another's record. The single deliberate divergence is `processFiles`' `forceUpload`
   flag, which only `api.upload(files)` passes: `autoUpload: false` holds back the *automatic*
   dispatch that follows a drop, a paste or a pick, but an explicit imperative call must still
   upload. Validation is not skippable — `forceUpload` bypasses the queue, never the gate.
@@ -52,11 +55,16 @@ The invariants the layout encodes:
   host they resolve against the initial containing block, the input sits at document (0, viewport
   height) whatever page the zone is on, and a real Tab moved `scrollY` 5535 → 656 with the zone
   5722px below the fold. `anchor.ts` is deliberately the *only* module that writes layout to the
-  host, and `pickerHostPositioned` is what stops it reverting a value it did not write. The
+  host, and teardown reverts only a value the module can still see is its own: the
+  `pickerHostPositioned` flag says it wrote a position at some point, and the current inline value
+  says whether that write is still standing. The flag alone is not enough — a consumer who
+  positions the host *after* the anchor went in (an object `:style`, a conditional class, a sticky
+  header) owns the property from then on, and Vue will not restore their value if teardown deletes
+  it (`patchStyle` skips when the binding is unchanged). The
   anchor is re-asserted on every `updated` and reads the host's *computed* position to decide,
   because the inline style it writes is shared territory: Vue patches a string `:style` binding
   with `el.style.cssText = next` and takes the anchor with it.
-- **Every write into the consumer's host is idempotent.** `syncPickerAttrs` and
+- **Every write into the consumer's host is idempotent.** `setState`, `syncPickerAttrs` and
   `applyPickerA11y` run on every `updated`, i.e. on every re-render of the component that owns
   the zone, and `setAttribute` queues a `MutationRecord` even when the value is unchanged. A
   consumer observing their own zone — which is exactly what a demo card that reads the
@@ -64,7 +72,31 @@ The invariants the layout encodes:
   has no fixed point: mutation → state → render → `updated` → mutation. The loop is
   microtask-driven, so the tab never yields; it hung the playground's `13-click-opt-out.vue` on
   load and, with it, every interaction check on the whole tab. `setAttr` writes only on a real
-  difference, which is what terminates it.
+  difference, which is what terminates it. `setState` does the same for `data-dropzone` — it used
+  to write unconditionally, and `processFiles` writes `'idle'` on every empty pick and every
+  non-upload drop. Reading an attribute to suppress an identical write is not the same as reading
+  it to find out what the state is; the value always comes from the caller.
+- **One store, and everything else is a projection of it.** This is the invariant the package
+  most needed and least had. `instance.records` is the only place the facts live — what files
+  exist, which are queued, in flight, or failed. Every question the state machine asks is asked of
+  it (`hasInflight`, `hasFailed`, `nonDragRestState`), and `instance.state` is the single memory of
+  the answer. `data-dropzone`, `api.state` and the api arrays are written *out* of those two and
+  never read back in.
+
+  Version 0.1.0 had three stores for one question and they disagreed. A per-batch counter
+  (`uploadBatch`) that any new drop overwrote decided "is the upload finished?"; `records`, never
+  pruned, decided "is there an error?"; and `el.getAttribute('data-dropzone')` — the consumer's own
+  DOM node — was read back by four transitions as the machine's memory. Overlapping drops made all
+  three disagree at once: the zone announced `success` with two files still uploading and then
+  swallowed their failure, because the counter it would have been reported through had already
+  been discarded. Both of the state bugs repaired in Run 20 were the same shape.
+
+  The rule that prevents the next one: **a new fact about a file goes in the record, and any code
+  that wants to know what the zone is doing derives it.** No module may keep a second tally.
+  `progressBatch` is the single deliberate exception — it holds records already deleted from
+  `records` so the CSS vars can show 100% through the `success` window — and it is a *snapshot for
+  display*, never consulted for a transition. A new batch merges into it rather than replacing it.
+
 - **`state.ts` owns every reflection.** Nothing else writes `data-dropzone`, the CSS variables, or
   the api arrays directly; modules mutate the instance and call the reflection helpers. That is
   what keeps the attribute, the vars, and the reactive arrays consistent with each other.

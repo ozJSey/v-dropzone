@@ -3,17 +3,39 @@
  * unmount) and retry. Group semantics: in URL-batched mode one XHR backs
  * every record in the group, so control operations cascade group-wide.
  */
-import { setState, syncApiArrays, type DropzoneInstance, type FileRecord } from './state'
-import type { DropzoneState } from './types'
+import {
+  hasFailed,
+  hasInflight,
+  setState,
+  syncApiArrays,
+  type DropzoneInstance,
+  type FileRecord,
+} from './state'
 import { startUploadsForRecords } from './upload'
+
+/**
+ * What `cancelRecordGroup` actually did. The caller needs the distinction:
+ * discarding a *queued* file changes nothing about what is on the wire, so it
+ * must not settle the state machine, while cancelling an in-flight one must.
+ */
+export type CancelOutcome = 'uploading' | 'pending' | 'none'
 
 /**
  * Cancel a single record (or its whole batch group for URL batched mode).
  * Records are removed from tracking — cancelled files do NOT land in `failed`.
- * Returns true if anything was actually cancelled (status was 'uploading').
+ *
+ * A `pending` record has no request to abort; it is simply dropped. That is
+ * the "remove from queue" button every review-before-upload UI needs, and
+ * without it a file queued under `autoUpload: false` could not be removed
+ * through any public api at all: `cancel(f)` was a no-op, `retry(f)` requires
+ * `failed`, and `dismissError()` only drops `failed`.
  */
-export function cancelRecordGroup(instance: DropzoneInstance, anchor: FileRecord): boolean {
-  if (anchor.status !== 'uploading') return false
+export function cancelRecordGroup(instance: DropzoneInstance, anchor: FileRecord): CancelOutcome {
+  if (anchor.status === 'pending') {
+    instance.records.delete(anchor.file)
+    return 'pending'
+  }
+  if (anchor.status !== 'uploading') return 'none'
 
   const group = anchor.group.length > 0 ? anchor.group : [anchor]
   const xhr = anchor.xhr
@@ -37,7 +59,17 @@ export function cancelRecordGroup(instance: DropzoneInstance, anchor: FileRecord
       /* completed XHR may throw in some envs */
     }
   }
-  return true
+  return 'uploading'
+}
+
+/**
+ * Settle the zone after a cancellation. Same derivation as `settleUpload`, with
+ * one difference the name carries: cancelling is never success. If work is
+ * still outstanding — including work a *later* drop started — nothing moves.
+ */
+export function settleAfterCancel(el: HTMLElement, instance: DropzoneInstance): void {
+  if (hasInflight(instance)) return
+  setState(el, instance, hasFailed(instance) ? 'error' : 'idle')
 }
 
 /**
@@ -62,31 +94,19 @@ export function cancelAllInflight(el: HTMLElement, instance: DropzoneInstance): 
 
   let cancelled = 0
   for (const a of anchors) {
-    if (cancelRecordGroup(instance, a)) cancelled += 1
+    if (cancelRecordGroup(instance, a) === 'uploading') cancelled += 1
   }
 
-  // Settle the state machine.
-  if (cancelled > 0) {
-    const batch = instance.uploadBatch
-    if (batch) {
-      batch.done += cancelled
-      if (batch.done >= batch.total) {
-        instance.uploadBatch = null
-        // No success — cancellation is not success.
-        // If anything failed before, errors > 0 → leave as 'error'. Else 'idle'.
-        const targetState: DropzoneState = batch.errors > 0 ? 'error' : 'idle'
-        setState(el, instance, targetState)
-      }
-    } else {
-      // No batch (already settled previously). State stays whatever it was.
-    }
-  }
+  if (cancelled > 0) settleAfterCancel(el, instance)
   syncApiArrays(instance)
 }
 
 /**
  * Hard cleanup: abort every XHR / AbortController, clear every record.
- * Used by `detach()` on unmount and by `dismissError()` after error.
+ * Used by `detach()` on unmount, and nothing else — `dismissError()` filters
+ * failed records out by hand precisely because it must leave in-flight uploads
+ * running (the README promises it transitions to `uploading` when some files
+ * are still on the wire, which aborting everything would make impossible).
  *
  * For XHR uploads, `xhr.abort()` triggers the `onabort` handler which emits
  * `onError(aborted)` for the consumer. For function-based uploads, the
@@ -129,7 +149,6 @@ export function abortAllUploads(instance: DropzoneInstance): void {
     instance.opts.onError?.(file, { message: 'Upload aborted', aborted: true })
   }
   instance.records.clear()
-  instance.uploadBatch = null
   syncApiArrays(instance)
 }
 

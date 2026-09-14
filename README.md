@@ -2,6 +2,16 @@
 
 See in action: [npm portfolio playground](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone).
 
+**Or go straight to the card for the thing you came for** — real files, a real dev server, and
+every card editable in the browser:
+[drop or click](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/drop-basic) ·
+[validation](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/validation) ·
+[upload with progress](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/url-upload) ·
+[custom transport](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/fn-upload) ·
+[paste a screenshot](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/paste) ·
+[the `DropzoneApi`](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/api) ·
+[folder drop](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/folder-drop)
+
 ## Playground
 
 Try the live examples in the [npm portfolio playground](https://github.com/ozJSey/npm-portfolio-playground).
@@ -113,6 +123,16 @@ HTML drag-and-drop is famously awful:
 > is not repeated in each snippet. Add `clickToPick: false` for a drag/paste-only zone, and give
 > the host `cursor: pointer` + a `:focus-within` outline so both affordances are visible
 > ([Accessibility](#accessibility)).
+
+> **Every recipe below is a card**, with the upload paths pointed at a real endpoint:
+> [1 drop or click](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/drop-basic) ·
+> [2 validation](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/validation) ·
+> [3 upload to a URL](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/url-upload) ·
+> [4 custom transport](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/fn-upload) ·
+> [5 paste](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/paste) ·
+> [6 click opt-out](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/click-opt-out) ·
+> [7 the api](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/api) ·
+> [8 queue, then upload](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/auto-upload-queue)
 
 ### 1. Drop or click, then display
 
@@ -318,7 +338,7 @@ const options = computed(() => ({ ref: dz, autoUpload: false, upload: { url: '/a
 Per-file vs all-or-nothing validation:
 
 - `accept` and `maxSize` are **per-file**. Files passing the rules go to `on`; failing files go to `onReject` with cumulative reasons.
-- `multiple: false` and `maxCount` are **drop-level**. If violated, the entire drop is rejected with reason `'count'`.
+- `multiple: false` and `maxCount` are **drop-level**. If violated, the entire drop is rejected with reason `'count'`. Drop-level means *this event only* — neither rule looks at files the zone is already holding, so repeated drops can push `dz.pending` past `maxCount`.
 
 ## Writing options inline
 
@@ -363,7 +383,7 @@ Pass `upload` to drive the directive's built-in pipeline. Two shapes are accepte
 The directive owns the `XMLHttpRequest` + `FormData` plumbing and surfaces progress events.
 
 ```ts
-upload: {
+const upload = {
   url: '/api/upload',                  // string OR (file) => string for dynamic URLs (e.g. S3 presigned)
   method: 'POST',                       // 'POST' (default) | 'PUT' | 'PATCH'
   headers: { Authorization: '…' },     // object OR (file) => object for dynamic headers
@@ -374,6 +394,7 @@ upload: {
   timeout: 0,                           // ms, 0 = no timeout (default)
   parseResponse: (xhr) => xhr.responseText, // override the default JSON-when-applicable parser
 }
+// …then bind it: <div v-dropzone="{ upload }">
 ```
 
 **Defaults:**
@@ -417,6 +438,9 @@ upload: async (file: File, signal: AbortSignal, onProgress?: (percent: number) =
 
 ## State attribute
 
+> [State lifecycle](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/state-machine) walks every transition below, including the sticky-error
+> rule, with the attribute printed as it changes.
+
 `data-dropzone` reflects the current state. Style with pure CSS, no JS state mirror needed:
 
 | State | Trigger |
@@ -424,11 +448,18 @@ upload: async (file: File, signal: AbortSignal, onProgress?: (percent: number) =
 | `idle` | default |
 | `active` | drag is over the zone (counter > 0) |
 | `rejected` | last drop failed validation; auto-clears to `idle` after `rejectDuration` ms (default `1500`). Cancelled if a new drag starts |
-| `uploading` | at least one upload is in flight (URL or function-based). Drag during upload temporarily flips to `active`; dragleave restores `uploading` until the batch settles |
-| `success` | all uploads in the batch completed. Auto-clears to `idle` after `successDuration` ms (default `1500`) |
-| `error` | at least one upload failed. **Sticky** — never auto-clears. Cleared on the next drop |
+| `uploading` | at least one upload is in flight (URL or function-based). Drag during upload temporarily flips to `active`; dragleave restores `uploading`. Drops overlap safely — dropping again while files are still on the wire keeps the zone `uploading` until **every** outstanding file has answered, not just the newest drop's |
+| `success` | everything outstanding completed, with nothing failed. Auto-clears to `idle` after `successDuration` ms (default `1500`) |
+| `error` | at least one tracked file failed. **Sticky** — never auto-clears. Cleared by `retry()`, `cancel(file)`, `dismissError()`, or by the next drop / paste / pick that brings in accepted files (which discards the failed records along with the state — see `failed` below) |
+
+The state is decided from the files the zone is tracking, so it cannot disagree with `api.failed`:
+while any file is in flight the zone is `uploading`, and while any tracked file has failed and has
+not been retried or dismissed the zone is `error`.
 
 ## CSS variables during upload
+
+> [CSS-only progress UI](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/css-progress) builds the bar from these two variables alone — no JS
+> mirror — including what it does when a file fails at 70%.
 
 The directive writes two CSS custom properties on the host element while an upload is in flight, so you can build a progress UI in pure CSS:
 
@@ -437,7 +468,9 @@ The directive writes two CSS custom properties on the host element while an uplo
 | `--dropzone-progress` | integer `0..100` | Rounded average percent across every file in the active batch |
 | `--dropzone-files-pending` | integer | Number of files in the active batch that haven't settled yet (success / error / timeout) |
 
-Both vars are **set** when uploads start, **persist** through `uploading` / `active` (drag-during-upload) / `success` / `error` states, and **clear** when the host returns to `idle` (cancel, success auto-clear, or unmount).
+Both vars are **set** when uploads start, **persist** through `uploading` / `active` (drag-during-upload) / `success` / `error` states, and **clear** when the host returns to `idle` (cancel, success auto-clear, or unmount) — and on a `rejected` drop that arrives once the previous batch has finished, so a progress bar never shows 100% for a drop that uploaded nothing.
+
+A second drop landing while the first is still uploading **adds** to the vars rather than replacing them: `--dropzone-files-pending` counts every file still outstanding across both drops and `--dropzone-progress` averages across all of them.
 
 ```vue
 <div v-dropzone="{ upload: { url: '/api/upload' } }" class="dz">
@@ -458,7 +491,7 @@ Both vars are **set** when uploads start, **persist** through `uploading` / `act
 
 **Failure semantics:** an erroring file contributes its **last reported percent** to the aggregate (so the UI can render "Failed at 75%"). A file that errors before any progress event was reported contributes `0`. `files-pending` decrements regardless of success or failure, reaching `0` once the batch fully settles.
 
-**Rejected drops** (validation failure) do not touch the vars — no upload was attempted.
+**Rejected drops** (validation failure) never *set* the vars — no upload was attempted. If a previous batch left values behind, a rejection clears them, unless files from that batch are still in flight (in which case the vars keep describing the live requests).
 
 ## Options
 
@@ -469,7 +502,7 @@ Both vars are **set** when uploads start, **persist** through `uploading` / `act
 | `accept` | `string` | — | MIME pattern (`'image/*'`), exact MIME (`'image/png'`), extension (`'.pdf'`), or comma-separated mix. Case-insensitive |
 | `multiple` | `boolean` | `true` | Set `false` to reject multi-file drops with reason `'count'`. Note: differs from `<input type="file">` where the default is `false` |
 | `maxSize` | `number` | — | Per-file size cap (bytes) — files over this are rejected with reason `'size'` |
-| `maxCount` | `number` | — | Total file count cap — exceeding files reject the whole drop with reason `'count'` |
+| `maxCount` | `number` | — | Count cap **per drop / paste / pick** — exceeding it rejects that whole event with reason `'count'`. It is not a running total: two drops of `maxCount` files each both pass, and nothing consults what the zone already holds. Cap the running total yourself off `api.pending` if you need one |
 | `rejectDuration` | `number` | `1500` | Milliseconds before `data-dropzone="rejected"` auto-clears to `"idle"` |
 | `clickToPick` | `boolean` | **`true`** | Click on the host (or any non-interactive descendant) opens the picker `<input type="file">`. `accept`/`multiple` flow through. The input is visually hidden but stays focusable, so Tab + Enter open the picker too. `false` opts out: no input at mount, no tab stop, drag/paste only |
 | `clickIgnore` | `string` | — | Extra CSS selector for descendants whose clicks must not open the picker, merged with the built-in interactive list. Matches anywhere up the ancestor chain. Must be valid CSS; matching the host itself has no effect (use `clickToPick: false`) |
@@ -502,10 +535,10 @@ const options = computed(() => ({ ref: dz, upload: { url: '/api/upload' } }))
 | `state` | `DropzoneState` (reactive) | Mirrors `data-dropzone` — `'idle' \| 'active' \| 'rejected' \| 'uploading' \| 'success' \| 'error'` |
 | `pending` | `readonly File[]` (reactive) | Files queued under `autoUpload: false` waiting for `upload()` |
 | `uploading` | `readonly File[]` (reactive) | Files currently in flight |
-| `failed` | `readonly File[]` (reactive) | Files whose upload errored — kept until `retry()`, `cancel()`, or `dismissError()` |
+| `failed` | `readonly File[]` (reactive) | Files whose upload errored — kept until `retry()`, `cancel()`, `dismissError()`, or the next drop / paste / pick that brings in accepted files, which reseeds the zone (the same rule that clears the sticky `error` state). Hold on to what you need from `onError` if you want a record that outlives the next drop |
 | `open()` | `() => void` | Opens the native file picker. Uses the zone's picker input, or creates one on demand when `clickToPick: false` (in which case it stays out of the tab order — your own button is the affordance) |
 | `upload(file?)` | `(file?: File \| File[]) => void` | No-arg flushes `pending` through the upload pipeline. With-arg routes the given files through validation + `on` + upload. Both forms upload **regardless of `autoUpload`** — that option gates the automatic dispatch after a drop / paste / pick, not an explicit call |
-| `cancel(file?)` | `(file?: File) => void` | No-arg aborts every in-flight upload. With-arg cancels just that file's group (URL batched mode aborts the whole group) |
+| `cancel(file?)` | `(file?: File) => void` | No-arg aborts every in-flight upload and leaves the queue alone. With-arg cancels just that file's group (URL batched mode aborts the whole group); if the file is only *queued* under `autoUpload: false` it is discarded from `pending` — that is the "remove from queue" lever, and it leaves the zone's state untouched |
 | `retry(file?)` | `(file?: File) => void` | No-arg retries every `failed` file as one combined batch. With-arg retries just that file's group |
 | `dismissError()` | `() => void` | Drops `failed` records from tracking and transitions `error` → `idle` (or `uploading` if a batch is still in flight) |
 
@@ -517,8 +550,8 @@ Single dependency-free file. No Vue components, no runtime deps beyond the `vue`
 
 | Format | Size |
 |---|---|
-| ESM minified | **15.1 KB** |
-| ESM minified + gzipped | **5.2 KB** |
+| ESM minified | **15.8 KB** |
+| ESM minified + gzipped | **5.4 KB** |
 
 Covers drag-drop + folder drops (recursive `webkitGetAsEntry` walk) + validation + click-to-pick + paste-from-clipboard + URL upload (XHR + progress + batched) + function upload (AbortController + progress callback) + programmatic API (open/upload/cancel/retry/dismissError) + `autoUpload` queue + CSS variables + full state lifecycle + picker accessibility (visually-hidden-but-focusable input, accessible name, affordance-driven tab stop). Tree-shakable (`vDropzone` / `default` / `DropzonePlugin` / `DIRECTIVE_NAME` exports).
 
@@ -558,16 +591,21 @@ import type {
   UploadValueOrFn,
   UploadMethod,
   UploadError,
-  UploadProgressEvent,
-  UploadResult,
 } from '@ozjsey/v-dropzone'
 ```
+
+`UploadProgressEvent` and `UploadResult` are also exported, and are **deprecated** — nothing in the
+package produces or accepts either, and they will be removed in the next major. Type a progress
+handler as `(file: File, percent: number) => void`; upload outcomes arrive through
+`onUploaded(file, response)` and `onError(file, error)`.
 
 No `@types/v-dropzone` companion package; the package ships its own `dist/vDropzone.d.ts`.
 
 `UploadFn` is generic on the response type: `UploadFn<{ id: string }>` types `onUploaded(file, response: { id: string })`.
 
 ## Folder drops
+
+> [Folder drop](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/folder-drop) — drag a directory onto it and watch the flattened list come back.
 
 Dropping a folder (or a mix of files and folders) works out of the box — no option to set. The
 directive walks the folder recursively via the FileSystem Entry API (`webkitGetAsEntry` — the
@@ -601,12 +639,14 @@ one flat `File[]` of everything inside, preserving top-level order (`[top.png, d
 
 - **Enter/leave counter** — `dragenter` increments, `dragleave` decrements. Moving the cursor across children does *not* flip the host to `idle`. This is the canonical drop-zone bug; pinned in tests.
 - **`dragover` always `preventDefault`s** — without it the browser navigates away to open the file natively. The directive does this for you.
+- **All four drag events also `stopPropagation`** — `dragenter`, `dragover`, `dragleave` and `drop` stop at the zone. An ancestor's `@dragover` / `@drop` will not fire while the pointer is over it, so a page-level "drop anywhere" overlay goes quiet over a zone, and **nesting one `v-dropzone` inside another does not work**: the inner zone swallows the `dragenter` the outer zone's depth counter needs, so the outer zone's `active` styling drops off while the drag is over the inner one. Use one zone per drop target.
 - **`drop` resets the counter to `0`** — even if the user dragged across multiple children before dropping.
 - **Per-file vs all-or-nothing validation** — type and size violations are per-file (others in the same drop still pass through); count violations reject the whole drop.
 - **Cumulative `reasons`** — a single drop may surface multiple reasons. Even when count-class rules fail, type / size reasons across the dropped files are still surfaced (e.g. `maxCount: 2` with three files where one is the wrong type → `reasons: ['type', 'count']`). Reasons are always in canonical order `['type', 'size', 'count']`.
 - **`data-dropzone="rejected"` auto-clears** — after `rejectDuration` ms. A new drag cancels the pending clear (so the user always sees `active` while dragging). A new drop resets the timer (most-recent-rejection wins).
 - **Drag during upload** — the host temporarily flips to `active`; on dragleave with no completed uploads the state returns to `uploading` (not `idle`).
-- **`error` is sticky** — never auto-clears, even after `successDuration`. The next drop reseeds the state machine.
+- **`error` is sticky** — never auto-clears, even after `successDuration`. The next drop / paste / pick that delivers accepted files reseeds the state machine, discarding the failed records with it; `retry()`, `cancel(file)` and `dismissError()` clear it explicitly. A retry of one failed file leaves another file's failure standing.
+- **Overlapping drops are safe** — drop again while the first set is still uploading and both sets are tracked as one outstanding population. The zone reports `success` only once everything has answered, a failure in *any* of them wins, and the CSS vars count them all. (Before 0.1.1 the second drop overwrote the first drop's bookkeeping: the zone flashed `success` with files still on the wire and then swallowed their failure entirely.)
 - **`unmounted` removes all listeners, aborts in-flight XHRs/`AbortController`s, and clears `data-dropzone`.** Pending success/reject timers are cancelled — no stray DOM mutations post-unmount.
 - **Per-element state via `WeakMap`** — multiple `v-dropzone` instances on the same page do not interfere; no per-instance setup required inside `v-for`.
 - **Click-to-pick is on by default** — the bare binding gives you drop, click and keyboard, because a zone that only accepts a drag excludes every user who cannot perform one. `clickToPick: false` opts out; nothing else changes.
@@ -621,6 +661,9 @@ one flat `File[]` of everything inside, preserving top-level order (`[top.png, d
 - **Paste pipeline shares processing with drop/pick** — same validation, same `rejected` lifecycle, same `upload` dispatch.
 
 ## Accessibility
+
+> [Click-to-pick: guards, opt-out, keyboard](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/click-to-pick) is where to Tab into a zone and
+> press Enter, and to check that an interactive descendant still keeps its own click.
 
 Clicking is the default, so keyboard and screen-reader access is not optional — a directive that
 makes an element clickable owes it keyboard operability. `v-dropzone` pays that debt with a **real

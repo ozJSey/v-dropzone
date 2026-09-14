@@ -6,7 +6,9 @@
 import { DEFAULT_REJECT_DURATION } from './constants'
 import {
   clearRejectTimer,
+  ensureRecord,
   nonDragRestState,
+  pruneFailedRecords,
   setState,
   syncApiArrays,
   type DropzoneInstance,
@@ -48,7 +50,10 @@ export function processFiles(
     const duration = instance.opts.rejectDuration ?? DEFAULT_REJECT_DURATION
     instance.rejectTimer = setTimeout(() => {
       instance.rejectTimer = null
-      if (el.getAttribute('data-dropzone') === 'rejected') setState(el, instance, 'idle')
+      // Only clear the state this timer put up, and hand back to whatever the
+      // zone actually is now — an upload the rejected drop interrupted is
+      // still running, and forcing `idle` here reported it as finished.
+      if (instance.state === 'rejected') setState(el, instance, nonDragRestState(instance))
     }, duration)
   } else if (!instance.opts.upload || accepted.length === 0) {
     setState(el, instance, 'idle')
@@ -57,30 +62,18 @@ export function processFiles(
   if (accepted.length > 0) instance.opts.on?.(accepted)
 
   if (accepted.length > 0 && instance.opts.upload) {
+    // New files reseed the machine, which is what the README has always
+    // promised of a sticky `error` ("cleared on the next drop"). Until 0.1.1
+    // nothing did it: the failed records stayed in the map, `api.failed` grew
+    // for the life of the page, and a later dragenter/dragleave read them back
+    // and repainted the zone red after the user had already re-uploaded.
+    // Retry does not come through here, so a retry of one file still leaves
+    // another file's failure standing.
+    pruneFailedRecords(instance)
+
     if (instance.opts.autoUpload === false && !forceUpload) {
       // Queue as pending; the consumer triggers upload via api.upload().
-      for (const file of accepted) {
-        const existing = instance.records.get(file)
-        if (existing) {
-          existing.status = 'pending'
-          existing.xhr = null
-          existing.controller = null
-          existing.abortAnnounced = false
-          existing.progressPercent = 0
-          existing.settled = false
-        } else {
-          instance.records.set(file, {
-            file,
-            status: 'pending',
-            xhr: null,
-            controller: null,
-            group: [],
-            abortAnnounced: false,
-            progressPercent: 0,
-            settled: false,
-          })
-        }
-      }
+      for (const file of accepted) ensureRecord(instance, file)
       syncApiArrays(instance)
       // Queued, not uploading — so the zone is at rest, and it has to say so.
       // `dragenter` set it to `active` on the way in and only `dragleave`

@@ -86,7 +86,16 @@ function isPositioned(el: HTMLElement): boolean {
  * what this module *wrote*, not what survived.
  */
 export function anchorPickerHost(el: HTMLElement, instance: DropzoneInstance): void {
-  if (isPositioned(el)) return
+  if (isPositioned(el)) {
+    // Positioned by someone. If it is no longer the value we wrote, the
+    // consumer has taken the property over since — an object `:style` binding,
+    // a conditional class that resolved to an inline style, a sticky header —
+    // and the claim has to be dropped or teardown would delete their value.
+    if (instance.pickerHostPositioned && el.style.position !== PICKER_HOST_POSITION) {
+      instance.pickerHostPositioned = false
+    }
+    return
+  }
   el.style.position = PICKER_HOST_POSITION
   instance.pickerHostPositioned = true
 }
@@ -94,9 +103,19 @@ export function anchorPickerHost(el: HTMLElement, instance: DropzoneInstance): v
 /**
  * Undo `anchorPickerHost`. A no-op unless this directive is the thing that
  * wrote the position — a host that arrived positioned is never un-positioned.
+ *
+ * The flag alone is not enough to know that. It records that the directive
+ * wrote a position at *some point*, not that the value sitting on the element
+ * now is still that write; a consumer who positions the host after we anchored
+ * it owns the property from then on, and Vue will not put their value back
+ * (`patchStyle` skips when the binding value is unchanged). So the current
+ * inline value is checked too, and only the exact string this module writes is
+ * removed. A consumer who sets inline `relative` themselves is indistinguishable
+ * from us and does lose it — the price of not tracking every write.
  */
 export function releasePickerHost(el: HTMLElement, instance: DropzoneInstance): void {
   if (!instance.pickerHostPositioned) return
-  el.style.removeProperty('position')
   instance.pickerHostPositioned = false
+  if (el.style.position !== PICKER_HOST_POSITION) return
+  el.style.removeProperty('position')
 }

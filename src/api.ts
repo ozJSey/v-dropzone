@@ -9,14 +9,19 @@ import { processFiles } from './process'
 import {
   nonDragRestState,
   setState,
-  stateMap,
   syncApiArrays,
   type DropzoneInstance,
   type FileRecord,
 } from './state'
-import type { DropzoneApi, DropzoneApiRef, DropzoneState } from './types'
+import type { DropzoneApi, DropzoneApiRef } from './types'
 import { startUploadsForRecords } from './upload'
-import { cancelAllInflight, cancelRecordGroup, retryAllFailed, retryRecord } from './upload-control'
+import {
+  cancelAllInflight,
+  cancelRecordGroup,
+  retryAllFailed,
+  retryRecord,
+  settleAfterCancel,
+} from './upload-control'
 
 /**
  * Build the reactive `DropzoneApi` for an instance. Methods close over
@@ -60,21 +65,12 @@ function createApi(el: HTMLElement, instance: DropzoneInstance): DropzoneApi {
       }
       const record = instance.records.get(file)
       if (!record) return
-      if (!cancelRecordGroup(instance, record)) {
-        syncApiArrays(instance)
-        return
-      }
-      // Account for the cancelled group in the batch counter.
-      const batch = instance.uploadBatch
-      if (batch) {
-        batch.done += 1
-        if (batch.done >= batch.total) {
-          instance.uploadBatch = null
-          const targetState: DropzoneState = batch.errors > 0 ? 'error' : 'idle'
-          setState(el, instance, targetState)
-        }
-      }
+      const outcome = cancelRecordGroup(instance, record)
       syncApiArrays(instance)
+      // Discarding a queued file changes nothing about what is on the wire, so
+      // it must not move the state — a sticky error stays, a live upload keeps
+      // reporting itself as live.
+      if (outcome === 'uploading') settleAfterCancel(el, instance)
     },
 
     retry(file?: File) {
@@ -94,7 +90,7 @@ function createApi(el: HTMLElement, instance: DropzoneInstance): DropzoneApi {
       }
       syncApiArrays(instance)
       // Transition state.
-      if (el.getAttribute('data-dropzone') === 'error') {
+      if (instance.state === 'error') {
         setState(el, instance, nonDragRestState(instance))
       }
     },
@@ -130,8 +126,9 @@ export function syncApi(el: HTMLElement, instance: DropzoneInstance): void {
   // Need an api object — build lazily.
   if (!instance.api) {
     instance.api = createApi(el, instance)
-    // Reflect current state into the brand-new api.
-    instance.api.state = (el.getAttribute('data-dropzone') as DropzoneState | null) ?? 'idle'
+    // Reflect current state into the brand-new api — from the instance, not
+    // from the attribute the instance wrote.
+    instance.api.state = instance.state
     syncApiArrays(instance)
   }
   // Same ref already bound? No-op.

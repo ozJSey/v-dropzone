@@ -61,7 +61,7 @@ function attach(el: HTMLElement, opts: DropzoneOptions): void {
     records: new Map(),
     api: null,
     ref: null,
-    uploadBatch: null,
+    state: 'idle',
     progressBatch: null,
   }
   // The listeners close over the real instance — build them once it exists.

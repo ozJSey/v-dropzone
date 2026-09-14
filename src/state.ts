@@ -82,11 +82,20 @@ export interface DropzoneInstance {
   /** The exact target the paste listener was added to — remembered so teardown always removes from where it attached, even after `pasteOn` changes mid-lifecycle. */
   pasteTarget: HTMLElement | Document | null
   /**
-   * Per-file tracking, keyed by File reference. Drives `api.pending`/`uploading`/`failed`
-   * and is the source of truth for cancel/retry. Records are added when files
-   * arrive (drop/paste/pick/`api.upload`) and removed on success or cancel.
-   * Failed records stay until `retry` succeeds, `cancel`, `dismissError`, or
-   * the next drop clears the sticky error.
+   * **The** store of what this zone is doing. Keyed by `File` reference, it
+   * drives `api.pending`/`uploading`/`failed`, it is what cancel/retry act on,
+   * and — since 0.1.1 — it is the only thing the state machine counts. Records
+   * are added when files arrive (drop/paste/pick/`api.upload`) and removed on
+   * success, on cancel, on `dismissError()`, and by the next batch of arriving
+   * files (the documented "a new drop reseeds the machine").
+   *
+   * Nothing else may hold a parallel tally of the same facts. A per-batch
+   * counter used to live here alongside it and the two disagreed the moment a
+   * second drop landed during an in-flight upload: the counter was overwritten,
+   * the first drop's completions settled the *second* drop's total, and the
+   * zone reported `success` with two files still on the wire — then swallowed
+   * their failure, because the counter it would have been reported through was
+   * already gone. `hasInflight` / `hasFailed` ask this map instead.
    */
   records: Map<File, FileRecord>
   /**
@@ -99,19 +108,25 @@ export interface DropzoneInstance {
   /** The most recently bound ref target, remembered so we can clear it on unmount or when the consumer swaps refs in `updated`. */
   ref: DropzoneApiRef | null
   /**
-   * Per-batch counters used to drive the post-upload state transition.
-   * `total` is fixed at the start of a batch; `done` increments on each
-   * load/error/timeout/abort; `errors` counts non-2xx + network + timeout
-   * outcomes. When `done === total`, decide between `success` and `error`.
+   * The state the directive last decided on, and the only place that decision
+   * is remembered. `data-dropzone` on the consumer's host and `api.state` are
+   * both *projections* written by `setState`; neither is ever read back to
+   * find out what the zone is doing. (They were, in 0.1.0 — four transitions
+   * branched on `el.getAttribute('data-dropzone')`, which made the consumer's
+   * own DOM node load-bearing memory that anything on the page could rewrite.)
    */
-  uploadBatch: { total: number; done: number; errors: number } | null
+  state: DropzoneState
   /**
-   * Snapshot of records that drive the current `--dropzone-progress` /
-   * `--dropzone-files-pending` CSS variables. Independent from `uploadBatch`
-   * because (a) URL batched mode has 1 group but N files (we want files-pending=N),
-   * and (b) the snapshot survives after the batch settles so the vars persist
-   * through the `success`/`error` window. Cleared on transition to `'idle'`
-   * (success auto-clear, cancel) and on unmount.
+   * Snapshot of the records the `--dropzone-progress` /
+   * `--dropzone-files-pending` CSS variables currently describe. Distinct from
+   * `records` because (a) URL batched mode has 1 XHR but N files (we want
+   * files-pending=N), and (b) the snapshot outlives a successful record, which
+   * is deleted from `records` on success, so the vars can hold 100% through the
+   * `success`/`error` window.
+   *
+   * A new batch *merges* into it rather than replacing it: any record from an
+   * earlier drop that has not settled yet is still on the wire and still has to
+   * be counted, or the bar resets to 0 while files are uploading.
    */
   progressBatch: FileRecord[] | null
 }
@@ -132,13 +147,57 @@ export function clearSuccessTimer(instance: DropzoneInstance): void {
   }
 }
 
+/** True while at least one tracked file is still on the wire. */
+export function hasInflight(instance: DropzoneInstance): boolean {
+  for (const r of instance.records.values()) {
+    if (r.status === 'uploading') return true
+  }
+  return false
+}
+
+/** True while at least one tracked file has failed and not been retried/dismissed. */
+export function hasFailed(instance: DropzoneInstance): boolean {
+  for (const r of instance.records.values()) {
+    if (r.status === 'failed') return true
+  }
+  return false
+}
+
+/** True while the progress snapshot still describes something that is uploading. */
+function snapshotIsLive(instance: DropzoneInstance): boolean {
+  const batch = instance.progressBatch
+  if (!batch) return false
+  for (const r of batch) {
+    if (!r.settled) return true
+  }
+  return false
+}
+
+/**
+ * Write a state. This is the only function that touches `data-dropzone`,
+ * `api.state` or `instance.state`, and it writes all three from the same
+ * argument — that is what keeps them from drifting.
+ *
+ * The attribute write is conditional. `setAttribute` queues a `MutationRecord`
+ * even when the value is unchanged, and `processFiles` writes `'idle'` on every
+ * empty pick and every non-upload drop; a consumer observing their own zone and
+ * setting reactive state from the callback then has no fixed point (mutation →
+ * state → render → `updated` → mutation) and the tab stops yielding. Reading
+ * the attribute here is a write-suppression check, never a source of the value.
+ */
 export function setState(el: HTMLElement, instance: DropzoneInstance, state: DropzoneState): void {
-  el.setAttribute('data-dropzone', state)
+  instance.state = state
+  if (el.getAttribute('data-dropzone') !== state) el.setAttribute('data-dropzone', state)
   if (instance.api) instance.api.state = state
-  // Vars are cleared whenever the host returns to idle — by any path (cancel,
-  // success auto-clear, dragleave with no upload, rejected auto-clear). Keeps
-  // the cleanup centralized and avoids drift between call sites.
-  if (state === 'idle' && instance.progressBatch) {
+  // The progress snapshot describes an upload. Drop it — and the vars with it —
+  // as soon as the zone stops showing one: `idle` by any path (cancel, success
+  // auto-clear, dragleave with no upload), and `rejected` when the snapshot has
+  // nothing left in flight. A `rejected` drop uploads nothing, so leaving
+  // `--dropzone-progress: 100` from the previous batch behind renders a full
+  // progress bar for work that never happened (DZ-4). A rejection that lands
+  // *during* a live upload keeps the vars — they still describe real requests.
+  const spent = state === 'idle' || (state === 'rejected' && !snapshotIsLive(instance))
+  if (spent && instance.progressBatch) {
     instance.progressBatch = null
     clearUploadVars(el)
   }
@@ -184,15 +243,62 @@ export function clearUploadVars(el: HTMLElement): void {
  * right state for "no drag in progress" given the current upload state.
  */
 export function nonDragRestState(instance: DropzoneInstance): DropzoneState {
-  if (instance.uploadBatch && instance.uploadBatch.done < instance.uploadBatch.total) return 'uploading'
-  // A sticky error outlives its batch — `advanceBatch` nulls `uploadBatch`
-  // before setting `error`, so the failed records are the only thing left to
-  // read it off. Without this a dragenter/dragleave that never drops would
-  // quietly clear an error the consumer has not dismissed.
-  for (const record of instance.records.values()) {
-    if (record.status === 'failed') return 'error'
-  }
+  // Both questions are asked of `records`, which is the only thing that knows.
+  // Work still outstanding outranks a past failure: the zone is uploading.
+  if (hasInflight(instance)) return 'uploading'
+  // A sticky error outlives the requests that produced it, so the failed
+  // records are what it is read off. Without this a dragenter/dragleave that
+  // never drops would quietly clear an error the consumer has not dismissed.
+  if (hasFailed(instance)) return 'error'
   return 'idle'
+}
+
+/**
+ * Create the record for `file`, or reset the one already tracked back to a
+ * clean `pending`. Every input path needs exactly this — a drop, a pick, a
+ * paste, `api.upload(files)`, and the auto-upload kickoff — and `FileRecord`
+ * has eight fields, so the literal lived in two modules and a ninth field would
+ * have had to be remembered in both.
+ */
+export function ensureRecord(instance: DropzoneInstance, file: File): FileRecord {
+  const existing = instance.records.get(file)
+  if (existing) {
+    existing.status = 'pending'
+    existing.xhr = null
+    existing.controller = null
+    existing.abortAnnounced = false
+    existing.progressPercent = 0
+    existing.settled = false
+    return existing
+  }
+  const record: FileRecord = {
+    file,
+    status: 'pending',
+    xhr: null,
+    controller: null,
+    group: [],
+    abortAnnounced: false,
+    progressPercent: 0,
+    settled: false,
+  }
+  instance.records.set(file, record)
+  return record
+}
+
+/**
+ * Drop every failed record. This is what makes the README's "the next drop
+ * reseeds the state machine" true: without it a failure sat in `records`
+ * forever, `api.failed` accumulated every file that ever failed, and the next
+ * bare dragenter/dragleave repainted the zone red long after the user had
+ * successfully re-uploaded (`nonDragRestState` reads the same map).
+ *
+ * Called only where *new* files enter the pipeline, never from retry — retrying
+ * one failed file must not discard the record for another.
+ */
+export function pruneFailedRecords(instance: DropzoneInstance): void {
+  for (const [file, record] of Array.from(instance.records.entries())) {
+    if (record.status === 'failed') instance.records.delete(file)
+  }
 }
 
 /**

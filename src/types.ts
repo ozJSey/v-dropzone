@@ -102,7 +102,16 @@ export type UploadError = {
   timedOut?: boolean
 }
 
-/** Progress payload — `loaded`/`total` are bytes; `percent` is `0..100` (integer). */
+/**
+ * Progress payload — `loaded`/`total` are bytes; `percent` is `0..100` (integer).
+ *
+ * @deprecated Nothing in the package produces or accepts this. `onProgress` is
+ * `(file: File, percent: number) => void`, and the directive never sees byte
+ * counts for the function-transport path, so it cannot supply `loaded`/`total`.
+ * It is still exported only because removing an exported type from a published
+ * package is a breaking change; it will go in the next major. Type your handler
+ * from `DropzoneOptions['onProgress']`.
+ */
 export type UploadProgressEvent = {
   file: File
   loaded: number
@@ -110,7 +119,14 @@ export type UploadProgressEvent = {
   percent: number
 }
 
-/** Discriminated success/error result. Generic on response shape so JSON-parsing consumers get a typed `.response`. */
+/**
+ * Discriminated success/error result. Generic on response shape so JSON-parsing consumers get a typed `.response`.
+ *
+ * @deprecated No callback or return value in the package is an `UploadResult`;
+ * outcomes are delivered through `onUploaded(file, response)` and
+ * `onError(file, error)`. Exported only until the next major, for the same
+ * reason as `UploadProgressEvent`.
+ */
 export type UploadResult<TResponse = unknown> =
   | { ok: true; file: File; response: TResponse }
   | { ok: false; file: File; error: UploadError }
@@ -154,6 +170,11 @@ export interface DropzoneApi {
    * - File argument: cancels just that file. In batched URL mode the whole batch is cancelled
    *   (a single XHR carries all files — aborting it stops every file in the request).
    * Cancelled files are removed from tracking. They do NOT land in `failed`.
+   *
+   * A file that is only *queued* (`autoUpload: false`, still in `api.pending`)
+   * has no request to abort — `cancel(file)` simply discards it, which is the
+   * "remove from queue" lever a review-before-upload UI needs. `cancel()` with
+   * no argument only touches uploads in flight and leaves the queue alone.
    */
   cancel(file?: File): void
   /**
@@ -192,7 +213,13 @@ export type DropzoneOptions = {
   multiple?: boolean
   /** Per-file size cap in bytes. */
   maxSize?: number
-  /** Total file count cap. */
+  /**
+   * File count cap **for a single drop / paste / pick**, not a running total.
+   * Two drops of `maxCount` files each both pass; nothing consults what the
+   * zone already holds. Exceeding it rejects the whole event with reason
+   * `'count'`. A running cap over `api.pending` is the consumer's to enforce
+   * today — see the README's `maxCount` note.
+   */
   maxCount?: number
   /** Handler invoked with the validated `File[]` on drop / paste / pick. */
   on?: DropzoneHandler
