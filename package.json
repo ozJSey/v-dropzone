@@ -9,11 +9,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ozJSey/vue-dropzone.git"
+    "url": "git+https://github.com/ozjsey/v-dropzone.git"
   },
-  "homepage": "https://github.com/ozJSey/vue-dropzone#readme",
+  "homepage": "https://github.com/ozjsey/v-dropzone#readme",
   "bugs": {
-    "url": "https://github.com/ozJSey/vue-dropzone/issues"
+    "url": "https://github.com/ozjsey/v-dropzone/issues"
   },
   "type": "module",
   "main": "dist/vDropzone.min.js",

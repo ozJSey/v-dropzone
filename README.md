@@ -12,10 +12,6 @@ every card editable in the browser:
 [the `DropzoneApi`](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/api) ·
 [folder drop](https://ozjsey.github.io/npm-portfolio-playground/#v-dropzone/folder-drop)
 
-## Playground
-
-Try the live examples in the [npm portfolio playground](https://github.com/ozJSey/npm-portfolio-playground).
-
 Vue 3 directive owning the full drag-drop pipeline. Drop / paste / click-to-pick → validate → upload → state. One binding, zero wrapper components, full TypeScript.
 
 > **Status:** `0.1.0` — drag-drop core + folder drops + validation + click-to-pick (**on by default**) + paste-from-clipboard + URL-based upload + function-based upload + programmatic `DropzoneApi` (via `ref`) + `autoUpload` + CSS progress variables. 330/330 vitest. See `TASKS.md` for the remaining polish items.
