@@ -9,6 +9,13 @@ Every entry below was confirmed by a test in `vDropzone.test.ts` that fails with
 and the state-machine entries were additionally driven in a real Chrome through the playground's
 `v-dropzone` tab.
 
+## 0.1.3 — 2026-09-18
+
+Documentation only; no code change. The README is cut to a landing page — problem, solution,
+install, a couple of usage examples — because the playground now carries the reference: every
+option driven in a real browser rather than described in a table. Claims that could not be
+verified against the source were deleted rather than carried across.
+
 ## [0.1.2] — 2026-09-17
 
 ### Fixed
