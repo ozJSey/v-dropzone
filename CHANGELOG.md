@@ -9,7 +9,7 @@ Every entry below was confirmed by a test in `vDropzone.test.ts` that fails with
 and the state-machine entries were additionally driven in a real Chrome through the playground's
 `v-dropzone` tab.
 
-## [0.1.2] — unreleased
+## [0.1.2] — 2026-09-17
 
 ### Fixed
 
