@@ -9,6 +9,42 @@ Every entry below was confirmed by a test in `vDropzone.test.ts` that fails with
 and the state-machine entries were additionally driven in a real Chrome through the playground's
 `v-dropzone` tab.
 
+## [0.1.2] — unreleased
+
+### Fixed
+
+- **A drop carrying no files reported a live upload as finished, killed its progress bar for
+  good, and wiped a sticky `error`.** `drop` fires for anything draggable, not just files — a
+  text selection, a link, an image dragged off another page, an empty folder — and `change`
+  fires with zero files when the file dialog is dismissed. All of them reached the pipeline with
+  an empty file list, and that branch wrote the literal `'idle'`.
+
+  With one file uploading, `data-dropzone` went `uploading` → `idle` and `api.state` went with
+  it, while `api.uploading` still listed the file: the two disagreed, which is the one thing the
+  0.1.1 store rewrite existed to make impossible. The progress bar did not merely reset —
+  `'idle'` also discards `instance.progressBatch`, and `writeUploadVars` clears the CSS variables
+  whenever there is no snapshot to describe, so every later progress event re-cleared them and
+  `--dropzone-progress` never came back for the rest of that upload. A sticky `error` the
+  consumer had not dismissed was cleared by the same line, with the failed records left in
+  `api.failed` behind it.
+
+  A drop that starts no request now hands the zone back to what it actually is
+  (`nonDragRestState`) rather than asserting `idle` — the same rule the reject timer and the
+  `autoUpload: false` queue path already followed. An idle zone still ends idle.
+
+### Documentation
+
+- **`cancel()` does not clear a failure, and the README said three times that it did.** The
+  `error` state row, the `api.failed` row and the "error is sticky" note all listed
+  `cancel(file)` / `cancel()` among the levers that clear a failed file. It has never done that
+  in any published version: `cancel` aborts what is in flight and discards what is queued, and a
+  failed record is neither — `cancel(file)` on one returns without touching it, and no-arg
+  `cancel()` deliberately preserves failed records so they stay retryable. Anyone who wired a
+  per-row "dismiss" button to `cancel(file)` got a silent no-op. The three claims are corrected
+  and the `cancel(file?)` api row now says outright that a failed file is not cancellable;
+  `retry(file)` and `dismissError()` are the levers. Behaviour is unchanged — `dismissError()`
+  remains all-or-nothing, so there is still no per-file dismissal.
+
 ## [0.1.1] — 2026-09-14
 
 ### Fixed

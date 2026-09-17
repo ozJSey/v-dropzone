@@ -38,7 +38,16 @@ export function processFiles(
   clearRejectTimer(instance)
 
   if (files.length === 0) {
-    setState(el, instance, 'idle')
+    // `nonDragRestState`, never the literal `'idle'`. A drop is fired for a
+    // dragged text selection, a link, an image dragged off another page and an
+    // empty folder; a pick fires `change` with zero files when the dialog is
+    // dismissed. None of those say anything about work already in flight, and
+    // `'idle'` claimed they did: it reported a live upload as finished, and
+    // `setState('idle')` also drops `progressBatch`, after which every later
+    // `writeUploadVars` finds no snapshot and clears the CSS variables again —
+    // so the progress bar went to zero mid-upload and never came back. A
+    // sticky `error` was wiped by the same line.
+    setState(el, instance, nonDragRestState(instance))
     return
   }
 
@@ -56,7 +65,13 @@ export function processFiles(
       if (instance.state === 'rejected') setState(el, instance, nonDragRestState(instance))
     }, duration)
   } else if (!instance.opts.upload || accepted.length === 0) {
-    setState(el, instance, 'idle')
+    // Same rule, same reason: this drop starts no request, so the zone returns
+    // to whatever it actually is rather than to a hardcoded `'idle'`. It only
+    // differs from `'idle'` with records still in the map, which needs `upload`
+    // to have been removed reactively while a request was on the wire — with
+    // no `upload` ever configured no record exists and this resolves to
+    // `'idle'`, exactly as before.
+    setState(el, instance, nonDragRestState(instance))
   }
 
   if (accepted.length > 0) instance.opts.on?.(accepted)

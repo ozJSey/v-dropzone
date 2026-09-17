@@ -6011,6 +6011,212 @@ describe('v-dropzone — api — cancel() on a queued file', () => {
     await flushPromises()
   })
 })
+/* ------------------------------------------------------------------ */
+/*  cancel() on a FAILED record — what the README is allowed to say    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `cancel` acts on work: it aborts what is in flight and discards what is
+ * queued. A failed file is neither, so both forms leave it alone — the record
+ * stays in `api.failed` (where `retry(file)` can still reach it) and the sticky
+ * `error` stays up. `dismissError()` is the lever that clears a failure.
+ *
+ * Pinned because the README claimed the opposite in three places until
+ * 2026-09-17 ("cleared by … `cancel(file)` …"), which sent anyone building a
+ * per-row dismiss button at an api call that does nothing at all.
+ */
+describe('v-dropzone — api — cancel() on a failed file', () => {
+  it('cancel(file) does not clear a failure — the record and the sticky error both stand', async () => {
+    const held = deferred<string>()
+    const upload = vi.fn<UploadFn>(() => held.promise)
+    const apiRef = ref<DropzoneApi>()
+    const { dz } = mountHost({ ref: apiRef as unknown as DropzoneApiRef, upload })
+    await nextTick()
+
+    const file = makeFile('a.png', 'image/png')
+    fireDragEvent(dz, 'drop', [file])
+    await flushPromises()
+    held.reject(new Error('boom'))
+    await flushPromises()
+    expect(dz.getAttribute('data-dropzone')).toBe('error')
+    expect(apiRef.value!.failed.map((f) => f.name)).toEqual(['a.png'])
+
+    apiRef.value!.cancel(file)
+    await flushPromises()
+
+    expect(apiRef.value!.failed.map((f) => f.name)).toEqual(['a.png'])
+    expect(dz.getAttribute('data-dropzone')).toBe('error')
+    expect(apiRef.value!.state).toBe('error')
+
+    // dismissError() is the lever that does clear it.
+    apiRef.value!.dismissError()
+    await flushPromises()
+    expect(apiRef.value!.failed).toEqual([])
+    expect(dz.getAttribute('data-dropzone')).toBe('idle')
+  })
+
+  it('cancel() with no argument preserves failed records too', async () => {
+    const deferreds = [deferred<string>(), deferred<string>()]
+    let call = 0
+    const upload = vi.fn<UploadFn>(() => deferreds[call++].promise)
+    const apiRef = ref<DropzoneApi>()
+    const { dz } = mountHost({ ref: apiRef as unknown as DropzoneApiRef, upload })
+    await nextTick()
+
+    const a = makeFile('a.png', 'image/png')
+    const b = makeFile('b.png', 'image/png')
+    fireDragEvent(dz, 'drop', [a, b])
+    await flushPromises()
+
+    deferreds[0].reject(new Error('boom'))
+    await flushPromises()
+    expect(apiRef.value!.failed.map((f) => f.name)).toEqual(['a.png'])
+
+    apiRef.value!.cancel()
+    await flushPromises()
+
+    expect(apiRef.value!.uploading).toEqual([])
+    expect(apiRef.value!.failed.map((f) => f.name)).toEqual(['a.png'])
+    expect(dz.getAttribute('data-dropzone')).toBe('error')
+    deferreds[1].resolve('ok')
+    await flushPromises()
+  })
+})
+/* ------------------------------------------------------------------ */
+/*  DZ-5 — a drop/pick that carries no files must not settle the zone  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `drop` fires for anything draggable, not just files: a text selection, a
+ * link, an image dragged off another page, an empty folder. `change` fires
+ * with zero files when the file dialog is dismissed. All of them reach
+ * `processFiles` with `files.length === 0`, and that branch used to write the
+ * literal `'idle'` — reporting a live upload as finished and wiping a sticky
+ * `error` the consumer had not dismissed. `'idle'` also drops
+ * `instance.progressBatch`, and `writeUploadVars` clears the CSS variables
+ * whenever there is no snapshot, so every later progress event re-cleared them:
+ * the progress bar went to zero mid-upload and never came back.
+ */
+describe('v-dropzone — a zero-file drop must not settle a live zone (DZ-5)', () => {
+  beforeEach(installFakeXhr)
+  afterEach(restoreXhr)
+
+  it('leaves an in-flight upload reported as uploading, vars intact and still live', async () => {
+    const apiRef = ref<DropzoneApi>()
+    const { dz } = mountHost({
+      ref: apiRef as unknown as DropzoneApiRef,
+      upload: { url: '/api/upload' },
+    })
+    await nextTick()
+
+    const xhr = await dropOneFile(dz, makeFile('a.png', 'image/png'))
+    xhr.emitProgress(50, 100)
+    expect(dz.getAttribute('data-dropzone')).toBe('uploading')
+    expect(dz.style.getPropertyValue('--dropzone-progress')).toBe('50')
+    expect(dz.style.getPropertyValue('--dropzone-files-pending')).toBe('1')
+
+    // The user drags a text selection over the zone and lets go.
+    fireDragEvent(dz, 'dragenter', [])
+    fireDragEvent(dz, 'drop', [])
+    await nextTick()
+
+    expect(dz.getAttribute('data-dropzone')).toBe('uploading')
+    expect(apiRef.value!.state).toBe('uploading')
+    expect(apiRef.value!.uploading.map((f) => f.name)).toEqual(['a.png'])
+    expect(dz.style.getPropertyValue('--dropzone-progress')).toBe('50')
+    expect(dz.style.getPropertyValue('--dropzone-files-pending')).toBe('1')
+
+    // …and the bar keeps moving. Dropping `progressBatch` killed it for good:
+    // `writeUploadVars` clears the vars when there is no snapshot to describe.
+    xhr.emitProgress(90, 100)
+    expect(dz.style.getPropertyValue('--dropzone-progress')).toBe('90')
+
+    xhr.emitLoad(200, '{}')
+    await nextTick()
+    expect(dz.getAttribute('data-dropzone')).toBe('success')
+  })
+
+  it('leaves a sticky error standing', async () => {
+    const apiRef = ref<DropzoneApi>()
+    const { dz } = mountHost({
+      ref: apiRef as unknown as DropzoneApiRef,
+      upload: { url: '/api/upload' },
+    })
+    await nextTick()
+
+    const xhr = await dropOneFile(dz, makeFile('a.png', 'image/png'))
+    xhr.emitError()
+    await nextTick()
+    expect(dz.getAttribute('data-dropzone')).toBe('error')
+
+    fireDragEvent(dz, 'drop', [])
+    await nextTick()
+
+    expect(dz.getAttribute('data-dropzone')).toBe('error')
+    expect(apiRef.value!.state).toBe('error')
+    expect(apiRef.value!.failed.map((f) => f.name)).toEqual(['a.png'])
+  })
+
+  it('an empty pick (dialog dismissed) does the same', async () => {
+    const { dz } = mountHost({ upload: { url: '/api/upload' } })
+    await nextTick()
+
+    const xhr = await dropOneFile(dz, makeFile('a.png', 'image/png'))
+    xhr.emitProgress(50, 100)
+
+    firePickedFiles(getHiddenInput(dz)!, [])
+    await nextTick()
+
+    expect(dz.getAttribute('data-dropzone')).toBe('uploading')
+    expect(dz.style.getPropertyValue('--dropzone-progress')).toBe('50')
+  })
+
+  it('still returns an idle zone to idle — the fix must not invent a state', async () => {
+    const on = vi.fn<(files: File[]) => void>()
+    const { dz } = mountHost({ on })
+    await nextTick()
+
+    fireDragEvent(dz, 'dragenter', [])
+    expect(dz.getAttribute('data-dropzone')).toBe('active')
+    fireDragEvent(dz, 'drop', [])
+    await nextTick()
+
+    expect(dz.getAttribute('data-dropzone')).toBe('idle')
+    expect(on).not.toHaveBeenCalled()
+  })
+
+  it('a drop of real files into a zone whose `upload` was removed mid-flight leaves the request alone', async () => {
+    const opts = { value: { upload: { url: '/api/upload' } } as DropzoneOptions }
+    const App = defineComponent({
+      setup() {
+        return () => withDirectives(h('div'), [[vDropzone, opts.value]])
+      },
+    })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const app = createApp(App)
+    app.mount(host)
+    const dz = host.querySelector('div')!
+    await nextTick()
+
+    const xhr = await dropOneFile(dz, makeFile('a.png', 'image/png'))
+    xhr.emitProgress(50, 100)
+    expect(dz.getAttribute('data-dropzone')).toBe('uploading')
+
+    const on = vi.fn<(files: File[]) => void>()
+    opts.value = { on }
+    app._instance!.proxy!.$forceUpdate()
+    await nextTick()
+
+    fireDragEvent(dz, 'drop', [makeFile('b.png', 'image/png')])
+    await nextTick()
+
+    expect(on).toHaveBeenCalledTimes(1)
+    expect(dz.getAttribute('data-dropzone')).toBe('uploading')
+    expect(dz.style.getPropertyValue('--dropzone-progress')).toBe('50')
+    app.unmount()
+  })
+})
 
 /* ------------------------------------------------------------------ */
 /*  DZ-4 — the CSS vars must not describe a drop that uploaded nothing */

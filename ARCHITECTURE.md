@@ -38,6 +38,16 @@ The invariants the layout encodes:
   flag, which only `api.upload(files)` passes: `autoUpload: false` holds back the *automatic*
   dispatch that follows a drop, a paste or a pick, but an explicit imperative call must still
   upload. Validation is not skippable — `forceUpload` bypasses the queue, never the gate.
+
+  **And no path through it writes the literal `'idle'`.** Every "this call starts no request"
+  exit goes through `nonDragRestState(instance)`, because arriving files say nothing about work
+  already in flight. Three of the four exits learned that the hard way and the fourth shipped:
+  `drop` fires for a dragged text selection, a link and an empty folder, and `change` fires with
+  zero files when the dialog is dismissed, so the empty-list branch ran constantly — and its
+  `'idle'` reported a live upload as finished, made `api.state` disagree with `api.uploading`,
+  and dropped `progressBatch`, after which `writeUploadVars` re-cleared the CSS variables on
+  every later progress event and the bar never came back (0.1.2). A hardcoded rest state in this
+  module is always the bug.
 - **One resolver per defaulted option, in the module that owns the feature.** `clickToPick`
   defaults to *on*, so "omitted" and `true` must resolve identically everywhere. `picker.ts`
   exports `wantsClickToPick(opts)` and `directive.ts` calls it in both places that need it —
