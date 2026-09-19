@@ -5,6 +5,7 @@ upload → state, from one binding.
 
 [![npm](https://img.shields.io/npm/v/@ozjsey/v-dropzone.svg)](https://www.npmjs.com/package/@ozjsey/v-dropzone)
 ![license MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![gzipped 5.35 KiB](https://img.shields.io/badge/gzipped-5.35%20KiB-blue.svg)
 ![dependencies 0](https://img.shields.io/badge/dependencies-0-blue.svg)
 
 ## The problem
